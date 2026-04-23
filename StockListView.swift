@@ -136,7 +136,7 @@ struct StockCard: View {
 
                 Spacer()
 
-                let changePct = stock.change_5y ?? 0
+                let changePct = stock.change_pct ?? 0
                 HStack(spacing: 4) {
                     Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
                     Text(String(format: "%.2f%%", changePct))
