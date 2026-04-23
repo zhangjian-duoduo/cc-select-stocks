@@ -7,7 +7,7 @@ K线数据模块 - 存储所有A股历史K线数据
 import baostock as bs
 import pymysql
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 import time
 
@@ -74,15 +74,13 @@ def get_all_stock_codes() -> list:
     bs.logout()
     return stocks
 
-def fetch_kline_data(stock_code: str, period: str = 'daily') -> Optional[pd.DataFrame]:
-    """获取单只股票的K线数据"""
+def fetch_kline_data(stock_code: str, period: str = 'daily', latest_only: bool = False) -> Optional[pd.DataFrame]:
+    """获取单只股票的K线数据
+    latest_only: True=只获取最新数据, False=获取全部历史数据
+    """
     lg = bs.login()
     if lg.error_code != '0':
         return None
-
-    # 计算起始日期（上市以来）
-    start_date = '1990-01-01'
-    end_date = datetime.now().strftime('%Y-%m-%d')
 
     # 转换周期
     frequency_map = {
@@ -94,6 +92,21 @@ def fetch_kline_data(stock_code: str, period: str = 'daily') -> Optional[pd.Data
 
     # 6开头是上海，0/3开头是深圳
     bs_code = f'sh.{stock_code}' if stock_code.startswith('6') else f'sz.{stock_code}'
+
+    # 根据参数决定获取多少数据
+    if latest_only:
+        # 只需要最新数据 - 快速获取
+        if period == 'daily':
+            start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+        elif period == 'weekly':
+            start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+        else:  # monthly
+            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    else:
+        # 获取全部历史数据
+        start_date = '1990-01-01'
+
+    end_date = datetime.now().strftime('%Y-%m-%d')
 
     rs = bs.query_history_k_data_plus(
         bs_code,
