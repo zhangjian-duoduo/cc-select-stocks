@@ -55,7 +55,7 @@ struct WatchListCard: View {
                 Text(String(format: "¥%.2f", stock.price ?? 0))
                     .font(.headline)
                     .foregroundColor(.white)
-                let changePct = stock.change_5y ?? 0
+                let changePct = stock.change_pct ?? 0
                 Text(String(format: "%.2f%%", changePct))
                     .font(.caption)
                     .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))

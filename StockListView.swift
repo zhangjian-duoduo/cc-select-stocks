@@ -153,12 +153,12 @@ struct StockCard: View {
     @ViewBuilder
     private var sortIndicatorView: some View {
         HStack(spacing: 4) {
-            // 涨跌指标 - 显示5年涨跌幅
+            // 涨跌指标 - 显示当日涨跌幅
             SortMetricView(
                 title: "涨跌",
-                value: String(format: "%.1f%%", stock.change_5y ?? 0),
+                value: String(format: "%.1f%%", stock.change_pct ?? 0),
                 isHighlighted: sortOption == .dailyChange,
-                color: (stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
+                color: (stock.change_pct ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
             )
 
             // 位置指标
