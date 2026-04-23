@@ -172,7 +172,7 @@ struct StockCard: View {
             // 筹码指标
             SortMetricView(
                 title: "筹码",
-                value: stock.chip_concentration.map { "\(Int($0))%" } ?? "-",
+                value: stock.chip_concentration.map { String(format: "%.0f", $0 * 100) + "%" } ?? "-",
                 isHighlighted: sortOption == .chip,
                 color: colorForChip(stock.chip_concentration)
             )

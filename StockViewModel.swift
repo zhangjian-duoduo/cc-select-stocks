@@ -7,6 +7,7 @@ enum SortOption: String, CaseIterable {
     case chip = "筹码"
     case shareholder = "股东"
     case bottomDivergence = "底背离"
+    case dailyChange = "涨跌"
 }
 
 class StockViewModel: ObservableObject {
@@ -126,6 +127,9 @@ class StockViewModel: ObservableObject {
         case .bottomDivergence:
             // 有任何背离返回1，否则0
             return (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1 : 0
+        case .dailyChange:
+            // 当日涨跌幅
+            return stock.change_pct ?? 0
         }
     }
 

@@ -137,13 +137,18 @@ class StockSelector:
         daily_df['close'] = pd.to_numeric(daily_df['close'], errors='coerce')
 
         current_price = daily_df['close'].iloc[-1]
-        start_price = daily_df['close'].iloc[0]
+        # change_pct应该是当日涨跌幅（和前一天相比）
+        if len(daily_df) >= 2:
+            prev_price = daily_df['close'].iloc[-2]
+            change_pct = float((current_price / prev_price - 1) * 100) if pd.notna(current_price) and pd.notna(prev_price) and prev_price != 0 else 0
+        else:
+            change_pct = 0
 
         return {
             'code': stock_code,
             'name': stock_name,
             'price': float(current_price) if pd.notna(current_price) else 0,
-            'change_pct': float((current_price / start_price - 1) * 100) if pd.notna(current_price) and pd.notna(start_price) and start_price != 0 else 0,
+            'change_pct': change_pct,
             'selected_at': datetime.now().strftime('%Y-%m-%d'),
             'type': 'ETF' if etf_mode else 'A'
         }
