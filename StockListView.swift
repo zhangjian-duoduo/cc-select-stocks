@@ -136,7 +136,7 @@ struct StockCard: View {
 
                 Spacer()
 
-                let changePct = stock.change_pct ?? 0
+                let changePct = stock.change_5y ?? 0
                 HStack(spacing: 4) {
                     Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
                     Text(String(format: "%.2f%%", changePct))
@@ -153,12 +153,12 @@ struct StockCard: View {
     @ViewBuilder
     private var sortIndicatorView: some View {
         HStack(spacing: 4) {
-            // 涨跌指标
+            // 涨跌指标 - 显示5年涨跌幅
             SortMetricView(
                 title: "涨跌",
-                value: String(format: "%.1f%%", stock.change_pct ?? 0),
+                value: String(format: "%.1f%%", stock.change_5y ?? 0),
                 isHighlighted: sortOption == .dailyChange,
-                color: (stock.change_pct ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
+                color: (stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
             )
 
             // 位置指标
@@ -379,7 +379,7 @@ struct StockDetailView: View {
                                 .foregroundColor(.white)
                         }
                         Spacer()
-                        let detailChangePct = stock.change_pct ?? 0
+                        let detailChangePct = stock.change_5y ?? 0
                         VStack(alignment: .trailing) {
                             Text("涨跌幅")
                                 .font(.caption)
