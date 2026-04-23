@@ -369,26 +369,14 @@ struct StockDetailView: View {
                     }
 
                     HStack {
-                        VStack(alignment: .leading) {
-                            Text("当前价格")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text(String(format: "¥%.2f", stock.price ?? 0))
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                        }
+                        Text("当前价格")
+                            .font(.caption)
+                            .foregroundColor(.gray)
                         Spacer()
-                        let detailChangePct = stock.change_5y ?? 0
-                        VStack(alignment: .trailing) {
-                            Text("涨跌幅")
-                                .font(.caption)
-                                .foregroundColor(.gray)
-                            Text(String(format: "%.2f%%", detailChangePct))
-                                .font(.title)
-                                .fontWeight(.bold)
-                                .foregroundColor(detailChangePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                        }
+                        Text(String(format: "¥%.2f", stock.price ?? 0))
+                            .font(.title)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
                     }
                 }
                 .padding()
