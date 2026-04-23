@@ -152,6 +152,9 @@ def refresh_stocks():
     from data_fetcher import DataFetcher
     from analyzer import TechnicalAnalyzer
 
+    conn = None
+    cursor = None
+
     try:
         df = DataFetcher()
         selector = StockSelector(df)
@@ -201,8 +204,81 @@ def refresh_stocks():
     except Exception as e:
         return jsonify({'code': 1, 'message': str(e)})
     finally:
-        cursor.close()
-        conn.close()
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/refresh_analysis', methods=['POST'])
+def refresh_analysis():
+    """只刷新现有股票的分析数据，不重新选股"""
+    import json
+    from data_fetcher import DataFetcher
+    from analyzer import TechnicalAnalyzer
+
+    conn = None
+    cursor = None
+
+    try:
+        df = DataFetcher()
+        analyzer = TechnicalAnalyzer(df)
+
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取所有现有股票
+        cursor.execute("SELECT code FROM stocks")
+        stocks = cursor.fetchall()
+
+        if not stocks:
+            return jsonify({'code': 1, 'message': '没有现有股票数据'})
+
+        updated = 0
+        for stock in stocks:
+            code = stock['code']
+            print(f"[刷新分析] {code}")
+
+            # 分析每只股票
+            try:
+                analysis = analyzer.analyze_stock(code)
+
+                # 更新分析数据
+                cursor.execute("""
+                    UPDATE stock_analysis SET
+                        holders_trend = %s,
+                        change_5y = %s,
+                        price_percentile = %s,
+                        chip_concentration = %s,
+                        macd_divergence = %s,
+                        trend_analysis = %s,
+                        price_position = %s
+                    WHERE code = %s
+                """, (
+                    json.dumps(analysis.get('holders_trend', [])),
+                    analysis.get('change_5y', 0),
+                    analysis.get('price_percentile', 50),
+                    analysis.get('chip_concentration', 0.5),
+                    json.dumps(analysis.get('macd_divergence', {})),
+                    json.dumps(analysis.get('trend_analysis', {})),
+                    analysis.get('price_position', 0.5),
+                    code
+                ))
+                updated += 1
+            except Exception as e:
+                print(f"[刷新分析] {code} 失败: {e}")
+                continue
+
+        conn.commit()
+
+        return jsonify({'code': 0, 'message': f'分析刷新完成，共更新 {updated} 只股票'})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 @app.route('/health', methods=['GET'])
 def health():
