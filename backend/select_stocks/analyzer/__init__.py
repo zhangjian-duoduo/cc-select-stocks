@@ -195,58 +195,59 @@ class TechnicalAnalyzer:
         return result
 
     def get_holder_trend(self, stock_code: str, years: int = 5) -> List[Dict]:
-        """获取股东人数趋势 (使用模拟但真实感的数据)"""
+        """获取股东人数趋势 (从东方财富获取真实数据)"""
         try:
-            # 由于无法从baostock获取股东人数，使用价格相关估算
-            # 通过价格走势推断股东变化：价格下跌时股东可能增加
+            import requests
+            import re
 
-            end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=365*years)).strftime('%Y%m%d')
+            # 转换股票代码格式: 000001 -> 000001.SZ
+            if stock_code.startswith('6'):
+                suffix = 'SH'
+            else:
+                suffix = 'SZ'
+            secucode = f"{stock_code}.{suffix}"
 
-            daily_df = self.df.fetch_with_fallback('get_stock_daily', stock_code, start_date, end_date)
-            if daily_df is None or len(daily_df) < 60:
-                return []
+            # 东方财富API
+            url = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
+            params = {
+                'sortColumns': 'END_DATE',
+                'sortTypes': '-1',
+                'pageSize': '20',  # 最近20个季度
+                'pageNumber': '1',
+                'reportName': 'RPT_HOLDERNUM_DET',
+                'columns': 'END_DATE,HOLDER_NUM',
+                'filter': f'(SECUCODE="{secucode}")'
+            }
 
-            daily_df = daily_df.copy()
-            daily_df['close'] = pd.to_numeric(daily_df['close'], errors='coerce')
-            daily_df = daily_df.dropna(subset=['close'])
+            r = requests.get(url, params=params, timeout=15)
+            data = r.json()
 
-            if len(daily_df) < 60:
-                return []
+            if data.get('success') and data.get('result'):
+                holder_data = data['result'].get('data', [])
+                result = []
+                for item in holder_data:
+                    date_str = item.get('END_DATE', '')
+                    # 提取日期字符串
+                    if date_str:
+                        date_match = re.search(r'(\d{4})-(\d{2})-\d{2}', str(date_str))
+                        if date_match:
+                            year, month = date_match.groups()
+                            quarter = (int(month) - 1) // 3 + 1
+                            date_formatted = f"{year}Q{quarter}"
+                        else:
+                            date_formatted = str(date_str)[:7]
+                    else:
+                        date_formatted = ''
 
-            # 模拟股东人数变化趋势 (基于价格变化方向)
-            # 假设每季度计算一次
-            result = []
-            base_holders = 50000  # 基准股东数
-
-            # 按季度分组
-            daily_df['quarter'] = pd.to_datetime(daily_df['date']).dt.to_period('Q')
-            quarters = daily_df.groupby('quarter').agg({
-                'close': ['first', 'last', 'mean']
-            }).reset_index()
-            quarters.columns = ['quarter', 'open', 'close', 'mean']
-
-            for _, row in quarters.iterrows():
-                quarter_str = str(row['quarter'])
-                # 价格变化
-                if row['close'] > row['open']:
-                    # 价格上涨，股东倾向于减少（获利了结）
-                    change = -0.02  # -2%
-                else:
-                    # 价格下跌，股东倾向于增加（抄底）
-                    change = 0.03  # +3%
-
-                base_holders = int(base_holders * (1 + change))
-
-                result.append({
-                    'date': quarter_str,
-                    'holders': base_holders
-                })
-
-            return result[-20:]  # 返回最近20个季度
+                    result.append({
+                        'date': date_formatted,
+                        'holders': item.get('HOLDER_NUM', 0)
+                    })
+                return result
+            return []
 
         except Exception as e:
-            print(f"[股东人数趋势] 失败: {e}")
+            print(f"[股东人数趋势] 获取失败: {e}")
             return []
 
     def get_change_5y(self, stock_code: str) -> float:
