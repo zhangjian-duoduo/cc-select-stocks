@@ -340,7 +340,7 @@ struct SortMetricView: View {
                 .font(.system(size: 10))
                 .foregroundColor(isHighlighted ? color : .gray)
         }
-        .frame(width: 38)
+        .frame(width: 32)
         .padding(.vertical, 4)
         .background(isHighlighted ? color.opacity(0.2) : Color.clear)
         .cornerRadius(6)
