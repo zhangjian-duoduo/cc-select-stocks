@@ -1,0 +1,39 @@
+name: SelectStocks
+options:
+  bundleIdPrefix: com.selectstocks
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+
+targets:
+  SelectStocks:
+    type: application
+    platform: iOS
+    sources:
+      - path: .
+        excludes:
+          - "*.xcodeproj"
+          - backend
+          - "project.yml"
+          - "project.md"
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        CFBundleDisplayName: "选股"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.selectstocks
+        INFOPLIST_KEY_CFBundleDisplayName: "选股"
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1,2"
