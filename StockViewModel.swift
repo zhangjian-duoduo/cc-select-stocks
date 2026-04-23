@@ -128,8 +128,8 @@ class StockViewModel: ObservableObject {
             // 有任何背离返回1，否则0
             return (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1 : 0
         case .dailyChange:
-            // 当日涨跌幅
-            return stock.change_pct ?? 0
+            // 5年涨跌幅
+            return stock.change_5y ?? 0
         }
     }
 
