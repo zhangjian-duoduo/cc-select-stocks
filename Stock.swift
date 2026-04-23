@@ -33,6 +33,42 @@ struct Stock: Identifiable, Codable {
         var medium: String?
         var long: String?
     }
+
+    // 处理可能为字符串的数值字段
+    enum CodingKeys: String, CodingKey {
+        case code, name, price, change_pct, selected_at
+        case holders_trend, change_5y, price_percentile, chip_concentration
+        case macd_divergence, trend_analysis, price_position
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(String.self, forKey: .code)
+        name = try container.decode(String.self, forKey: .name)
+        selected_at = try container.decodeIfPresent(String.self, forKey: .selected_at)
+
+        // 处理可能为字符串的数值字段
+        price = try Self.decodeNumeric(container: container, key: .price)
+        change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
+        change_5y = try Self.decodeNumeric(container: container, key: .change_5y)
+        price_percentile = try Self.decodeNumeric(container: container, key: .price_percentile)
+        chip_concentration = try Self.decodeNumeric(container: container, key: .chip_concentration)
+        price_position = try Self.decodeNumeric(container: container, key: .price_position)
+
+        holders_trend = try container.decodeIfPresent([HolderData].self, forKey: .holders_trend)
+        macd_divergence = try container.decodeIfPresent(MACDDivergence.self, forKey: .macd_divergence)
+        trend_analysis = try container.decodeIfPresent(TrendAnalysis.self, forKey: .trend_analysis)
+    }
+
+    private static func decodeNumeric(container: KeyedDecodingContainer<Stock.CodingKeys>, key: CodingKeys) throws -> Double? {
+        if let doubleValue = try? container.decode(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
+            return doubleValue
+        }
+        return nil
+    }
 }
 
 struct StockResponse: Codable {

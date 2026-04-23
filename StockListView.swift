@@ -41,6 +41,7 @@ struct StockListView: View {
                         NavigationLink(destination: StockDetailView(stock: stock)) {
                             StockCard(stock: stock, sortOption: stockViewModel.sortOption)
                         }
+                        .buttonStyle(PlainButtonStyle())
                         .listRowBackground(Color(hex: "1E1E1E"))
                     }
                 }
@@ -120,12 +121,17 @@ struct StockCard: View {
 
                 // 收藏按钮
                 Button {
-                    stockViewModel.toggleFavorite(stock)
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        stockViewModel.toggleFavorite(stock)
+                    }
                 } label: {
                     Image(systemName: stockViewModel.isFavorited(stock.code) ? "star.fill" : "star")
                         .foregroundColor(stockViewModel.isFavorited(stock.code) ? Color(hex: "FFC107") : .gray)
                         .font(.title3)
+                        .scaleEffect(stockViewModel.isFavorited(stock.code) ? 1.2 : 1.0)
                 }
+                .buttonStyle(PlainButtonStyle())
+                .animation(.easeInOut(duration: 0.2), value: stockViewModel.isFavorited(stock.code))
             }
 
             HStack {
@@ -136,7 +142,8 @@ struct StockCard: View {
 
                 Spacer()
 
-                let changePct = stock.change_5y ?? 0
+                // 当日涨跌幅
+                let changePct = stock.change_pct ?? 0
                 HStack(spacing: 4) {
                     Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
                     Text(String(format: "%.2f%%", changePct))
@@ -151,14 +158,14 @@ struct StockCard: View {
     }
 
     @ViewBuilder
-    private var sortIndicatorView: some View {
-        HStack(spacing: 4) {
-            // 涨跌指标 - 显示当日涨跌幅
+    var sortIndicatorView: some View {
+        HStack(spacing: 6) {
+            // 5年涨跌指标
             SortMetricView(
-                title: "涨跌",
-                value: String(format: "%.1f%%", stock.change_pct ?? 0),
-                isHighlighted: sortOption == .dailyChange,
-                color: (stock.change_pct ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
+                title: "5年",
+                value: String(format: "%.1f%%", stock.change_5y ?? 0),
+                isHighlighted: sortOption == .change5Y,
+                color: (stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
             )
 
             // 位置指标
@@ -204,7 +211,7 @@ struct StockCard: View {
         .padding(.horizontal, 4)
     }
 
-    private func calculateScore() -> String {
+    func calculateScore() -> String {
         // 与StockViewModel保持一致的评分算法
         // 1. 趋势得分 (30%)
         let trendScore = trendScoreValue()
@@ -239,7 +246,7 @@ struct StockCard: View {
         return String(format: "%.0f", min(1.0, max(0.0, total)) * 100)
     }
 
-    private func trendScoreValue() -> Double {
+    func trendScoreValue() -> Double {
         guard let t = stock.trend_analysis else { return 0.5 }
         switch t.short {
         case "上涨趋势": return 1.0
@@ -249,7 +256,7 @@ struct StockCard: View {
         }
     }
 
-    private func shareholderChangePercent() -> Double {
+    func shareholderChangePercent() -> Double {
         guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
         let oldest = trend.last?.holders ?? 0
         let newest = trend.first?.holders ?? 0
@@ -259,7 +266,7 @@ struct StockCard: View {
         return 0
     }
 
-    private func shareholderTrendValue() -> String {
+    func shareholderTrendValue() -> String {
         // 显示5年来股东人数变化百分比
         guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
         let oldest = trend.last?.holders ?? 0
@@ -274,17 +281,17 @@ struct StockCard: View {
     }
 
     // 获取背离级别显示文本
-    private func divergenceDisplayText() -> String {
+    func divergenceDisplayText() -> String {
         guard let div = stock.macd_divergence else { return "-" }
         var levels: [String] = []
-        if div.daily == true { levels.append("日") }
-        if div.weekly == true { levels.append("周") }
         if div.monthly == true { levels.append("月") }
-        return levels.isEmpty ? "-" : levels.joined(separator: "/") + "背"
+        if div.weekly == true { levels.append("周") }
+        if div.daily == true { levels.append("日") }
+        return levels.isEmpty ? "-" : levels.joined()
     }
 
     // 背离颜色
-    private func colorForDivergence() -> Color {
+    func colorForDivergence() -> Color {
         guard let div = stock.macd_divergence else { return .gray }
         if div.monthly == true { return Color(hex: "4CAF50") }  // 月背离最强
         else if div.weekly == true { return Color(hex: "1E88E5") }
@@ -292,28 +299,28 @@ struct StockCard: View {
         else { return .gray }
     }
 
-    private func colorForPosition(_ position: Double?) -> Color {
+    func colorForPosition(_ position: Double?) -> Color {
         guard let pos = position else { return .gray }
         if pos < 0.15 { return Color(hex: "4CAF50") }
         else if pos < 0.3 { return Color(hex: "1E88E5") }
         else { return Color(hex: "FFC107") }
     }
 
-    private func colorForScore(_ score: String) -> Color {
+    func colorForScore(_ score: String) -> Color {
         guard let value = Double(score), value > 0 else { return .gray }
         if value >= 70 { return Color(hex: "4CAF50") }
         else if value >= 50 { return Color(hex: "1E88E5") }
         else { return Color(hex: "FFC107") }
     }
 
-    private func colorForChip(_ chip: Double?) -> Color {
+    func colorForChip(_ chip: Double?) -> Color {
         guard let c = chip else { return .gray }
         if c >= 80 { return Color(hex: "4CAF50") }
         else if c >= 60 { return Color(hex: "1E88E5") }
         else { return Color(hex: "FFC107") }
     }
 
-    private func colorForShareholder(_ value: String) -> Color {
+    func colorForShareholder(_ value: String) -> Color {
         if value == "-" { return .gray }
         if value.hasPrefix("+") { return Color(hex: "F44336") } // 股东增加 = 分散
         if let num = Double(value.replacingOccurrences(of: "%", with: "")), num < -10 { return Color(hex: "4CAF50") } // 大幅减少 = 集中
@@ -340,7 +347,7 @@ struct SortMetricView: View {
                 .font(.system(size: 10))
                 .foregroundColor(isHighlighted ? color : .gray)
         }
-        .frame(width: 32)
+        .frame(width: 40)
         .padding(.vertical, 4)
         .background(isHighlighted ? color.opacity(0.2) : Color.clear)
         .cornerRadius(6)
@@ -658,7 +665,7 @@ struct StockDetailView: View {
     }
 
     // 估值颜色
-    private func valuationColor(_ percentile: Double) -> Color {
+    func valuationColor(_ percentile: Double) -> Color {
         if percentile < 20 { return Color(hex: "4CAF50") }
         else if percentile < 50 { return Color(hex: "1E88E5") }
         else if percentile < 80 { return Color(hex: "FFC107") }
@@ -666,7 +673,7 @@ struct StockDetailView: View {
     }
 
     // 估值标签
-    private func valuationLabel(_ percentile: Double) -> some View {
+    func valuationLabel(_ percentile: Double) -> some View {
         Group {
             if percentile < 20 { Text("极低估值") }
             else if percentile < 40 { Text("低估值") }
@@ -679,7 +686,7 @@ struct StockDetailView: View {
     }
 
     // 价格位置描述
-    private func pricePositionDescription(_ percentile: Double) -> String {
+    func pricePositionDescription(_ percentile: Double) -> String {
         if percentile < 20 { return "历史低位，适合布局" }
         else if percentile < 40 { return "价格偏低，关注机会" }
         else if percentile < 60 { return "价格合理" }
@@ -688,7 +695,7 @@ struct StockDetailView: View {
     }
 
     // 筹码颜色
-    private func chipColor(_ value: Double) -> Color {
+    func chipColor(_ value: Double) -> Color {
         if value > 80 { return Color(hex: "4CAF50") }
         else if value > 60 { return Color(hex: "1E88E5") }
         else if value > 40 { return Color(hex: "FFC107") }
@@ -696,7 +703,7 @@ struct StockDetailView: View {
     }
 
     // 筹码标签
-    private func chipLabel(_ value: Double) -> some View {
+    func chipLabel(_ value: Double) -> some View {
         Group {
             if value > 80 { Text("高度集中") }
             else if value > 60 { Text("相对集中") }
@@ -708,10 +715,11 @@ struct StockDetailView: View {
     }
 
     // 筹码描述
-    private func chipDescription(_ value: Double) -> String {
+    func chipDescription(_ value: Double) -> String {
         if value > 80 { return "主力高度控盘，可能快速拉升" }
         else if value > 60 { return "筹码集中，上涨概率大" }
         else if value > 40 { return "筹码分布均衡" }
         else { return "筹码分散，上涨动力不足" }
     }
 }
+

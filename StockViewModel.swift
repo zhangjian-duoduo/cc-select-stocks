@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import SwiftUI
 
 enum SortOption: String, CaseIterable {
     case position = "位置"
@@ -7,7 +8,8 @@ enum SortOption: String, CaseIterable {
     case chip = "筹码"
     case shareholder = "股东"
     case bottomDivergence = "底背离"
-    case dailyChange = "涨跌"
+    case dailyChange = "当日涨跌"
+    case change5Y = "5年涨跌"
 }
 
 class StockViewModel: ObservableObject {
@@ -17,14 +19,30 @@ class StockViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var sortOption: SortOption = .position
     @Published var sortAscending: Bool = false
-    @Published var favorites: Set<String> = []
+    @Published var favorites: Set<String> = [] {
+        didSet {
+            saveFavorites()
+        }
+    }
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let favoritesKey = "favorited_stocks"
 
     init() {
+        loadFavorites()
         Task {
             await loadData()
         }
+    }
+
+    private func loadFavorites() {
+        if let savedFavorites = UserDefaults.standard.array(forKey: favoritesKey) as? [String] {
+            favorites = Set(savedFavorites)
+        }
+    }
+
+    private func saveFavorites() {
+        UserDefaults.standard.set(Array(favorites), forKey: favoritesKey)
     }
 
     @MainActor
@@ -43,6 +61,14 @@ class StockViewModel: ObservableObject {
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
+
+            // 调试：打印响应长度
+            print("收到数据: \(data.count) bytes")
+
+            // 打印前500个字符的JSON用于调试
+            if let jsonString = String(data: data, encoding: .utf8) {
+                print("JSON预览: \(String(jsonString.prefix(500)))")
+            }
 
             guard let httpResponse = response as? HTTPURLResponse else {
                 errorMessage = "无效响应"
@@ -69,13 +95,16 @@ class StockViewModel: ObservableObject {
             switch error {
             case .keyNotFound(let key, _):
                 self.errorMessage = "缺少字段: \(key.stringValue)"
-            case .typeMismatch(let type, _):
-                self.errorMessage = "类型不匹配: \(type)"
+            case .typeMismatch(let type, let context):
+                let debugDescription = context.debugDescription
+                self.errorMessage = "类型不匹配: \(type) - \(debugDescription)"
             case .valueNotFound(let type, _):
                 self.errorMessage = "值为空: \(type)"
             default:
                 self.errorMessage = "数据解析错误: \(error.localizedDescription)"
             }
+            // 打印原始错误用于调试
+            print("JSON解析错误: \(error)")
         } catch {
             self.errorMessage = "网络错误: \(error.localizedDescription)"
         }
@@ -130,6 +159,9 @@ class StockViewModel: ObservableObject {
         case .dailyChange:
             // 当日涨跌幅
             return stock.change_pct ?? 0
+        case .change5Y:
+            // 5年涨跌幅
+            return stock.change_5y ?? 0
         }
     }
 

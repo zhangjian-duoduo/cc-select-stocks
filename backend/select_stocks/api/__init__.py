@@ -68,6 +68,8 @@ def get_stocks():
                     val = row['change_pct']
                     if isinstance(val, (int, float, Decimal)):
                         row['change_pct'] = float(val)
+                    elif isinstance(val, str) and val:
+                        row['change_pct'] = float(val)
                     elif val and val != 'None':
                         row['change_pct'] = float(val)
                     else:
@@ -84,11 +86,18 @@ def get_stocks():
                         row[json_field] = None
                 else:
                     row[json_field] = None
-            # 处理数值字段
-            for num_field in ['price_percentile', 'chip_concentration', 'change_5y', 'price_position']:
+            # 处理数值字段 - 统一处理所有可能为字符串的数值字段
+            for num_field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position']:
                 if row.get(num_field):
                     try:
-                        row[num_field] = float(row[num_field])
+                        val = row[num_field]
+                        if isinstance(val, (int, float, Decimal)):
+                            row[num_field] = float(val)
+                        elif isinstance(val, str) and val:
+                            # 尝试转换字符串为数字
+                            row[num_field] = float(val)
+                        else:
+                            row[num_field] = None
                     except:
                         row[num_field] = None
                 else:
