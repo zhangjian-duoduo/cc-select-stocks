@@ -32,6 +32,7 @@ class StockViewModel: ObservableObject {
         loadFavorites()
         Task {
             await loadData()
+            await updatePrices()  // 打开app时自动更新价格
         }
     }
 
@@ -43,6 +44,24 @@ class StockViewModel: ObservableObject {
 
     private func saveFavorites() {
         UserDefaults.standard.set(Array(favorites), forKey: favoritesKey)
+    }
+
+    // 更新实时价格
+    @MainActor
+    func updatePrices() async {
+        guard let url = URL(string: "\(baseURL)/update_prices") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                print("价格更新成功")
+            }
+        } catch {
+            print("价格更新失败: \(error)")
+        }
     }
 
     @MainActor

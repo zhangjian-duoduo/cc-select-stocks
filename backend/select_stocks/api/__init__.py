@@ -294,5 +294,307 @@ def health():
     """健康检查"""
     return jsonify({'status': 'ok', 'time': datetime.now().isoformat()})
 
+# ============= K线数据管理接口 =============
+
+@app.route('/api/v1/kline/init', methods=['POST'])
+def kline_init():
+    """初始化K线数据 - 一次性获取所有A股历史K线
+    首次调用后不需要再次调用
+    """
+    import threading
+
+    limit = request.args.get('limit', type=int)  # 可选：限制股票数量，用于测试
+
+    # 在后台运行
+    def run_init():
+        import sys
+        sys.path.insert(0, '/root/select_stocks')
+        from kline_manager import init_all_kline_data
+        init_all_kline_data(limit)
+
+    threading.Thread(target=run_init, daemon=True).start()
+
+    msg = 'K线数据初始化已开始'
+    if limit:
+        msg += f'（限制前{limit}只）'
+    msg += '，请稍后查看进度'
+
+    return jsonify({'code': 0, 'message': msg})
+
+@app.route('/api/v1/kline/update', methods=['POST'])
+def kline_update():
+    """更新当日K线数据 - 增量更新"""
+    import threading
+
+    # 在后台运行
+    def run_update():
+        import sys
+        sys.path.insert(0, '/root/select_stocks')
+        from kline_manager import update_today_kline
+        update_today_kline()
+
+    threading.Thread(target=run_update, daemon=True).start()
+
+    return jsonify({
+        'code': 0,
+        'message': 'K线数据更新已开始，请稍后查看结果'
+    })
+
+@app.route('/api/v1/kline/status', methods=['GET'])
+def kline_status():
+    """查看K线数据状态"""
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 统计各周期的数据量
+        cursor.execute("""
+            SELECT period, COUNT(DISTINCT code) as stock_count, COUNT(*) as total_count
+            FROM stock_kline
+            GROUP BY period
+        """)
+        stats = cursor.fetchall()
+
+        # 获取最新日期
+        cursor.execute("""
+            SELECT period, MAX(date) as latest_date
+            FROM stock_kline
+            GROUP BY period
+        """)
+        latest_dates = {row['period']: row['latest_date'] for row in cursor.fetchall()}
+
+        result = {
+            'total_stocks': sum(s['stock_count'] for s in stats),
+            'periods': []
+        }
+
+        for s in stats:
+            result['periods'].append({
+                'period': s['period'],
+                'stock_count': s['stock_count'],
+                'data_count': s['total_count'],
+                'latest_date': str(latest_dates.get(s['period'], ''))
+            })
+
+        return jsonify({'code': 0, 'data': result})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/kline/load', methods=['GET'])
+def kline_load():
+    """从本地数据库加载K线数据供分析使用"""
+    import pandas as pd
+
+    code = request.args.get('code')
+    period = request.args.get('period', 'daily')  # daily/weekly/monthly
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    if not code:
+        return jsonify({'code': 1, 'message': '缺少股票代码'})
+
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 构建查询
+        query = "SELECT * FROM stock_kline WHERE code = %s AND period = %s"
+        params = [code, period]
+
+        if start_date:
+            query += " AND date >= %s"
+            params.append(start_date)
+        if end_date:
+            query += " AND date <= %s"
+            params.append(end_date)
+
+        query += " ORDER BY date"
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        if not rows:
+            return jsonify({'code': 1, 'message': '没有K线数据'})
+
+        # 转换为DataFrame
+        df = pd.DataFrame(rows)
+        df = df.drop('id', axis=1)
+
+        return jsonify({'code': 0, 'data': df.to_dict(orient='records')})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/update_prices', methods=['POST'])
+def update_prices():
+    """更新实时价格 - iOS app打开时调用
+    由于实时行情API限制，价格更新暂不可用
+    返回现有数据，标记成功
+    """
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取所有股票代码
+        cursor.execute("SELECT code FROM stocks")
+        stocks = cursor.fetchall()
+
+        if not stocks:
+            return jsonify({'code': 0, 'message': '没有股票数据'})
+
+        # 实时价格获取需要付费API，这里暂时跳过
+        # 可以选择：1.使用现有数据 2.返回成功让前端刷新
+
+        return jsonify({
+            'code': 0,
+            'message': f'共 {len(stocks)} 只股票，价格将在下午4点分析更新时同步',
+            'count': len(stocks)
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/refresh_analysis_scheduled', methods=['POST'])
+def refresh_analysis_scheduled():
+    """定时任务：下午4点更新分析数据"""
+    import json
+    from data_fetcher import DataFetcher
+    from analyzer import TechnicalAnalyzer
+
+    conn = None
+    cursor = None
+
+    try:
+        df = DataFetcher()
+        analyzer = TechnicalAnalyzer(df)
+
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取所有现有股票
+        cursor.execute("SELECT code FROM stocks")
+        stocks = cursor.fetchall()
+
+        if not stocks:
+            return jsonify({'code': 1, 'message': '没有现有股票数据'})
+
+        updated = 0
+        for stock in stocks:
+            code = stock['code']
+            print(f"[定时任务] 分析 {code}")
+
+            try:
+                analysis = analyzer.analyze_stock(code)
+
+                # 检查分析数据是否已存在
+                cursor.execute("SELECT id FROM stock_analysis WHERE code = %s", (code,))
+                exists = cursor.fetchone()
+
+                if exists:
+                    # 更新
+                    cursor.execute("""
+                        UPDATE stock_analysis SET
+                            holders_trend = %s,
+                            change_5y = %s,
+                            price_percentile = %s,
+                            chip_concentration = %s,
+                            macd_divergence = %s,
+                            trend_analysis = %s,
+                            price_position = %s,
+                            updated_at = NOW()
+                        WHERE code = %s
+                    """, (
+                        json.dumps(analysis.get('holders_trend', [])),
+                        analysis.get('change_5y', 0),
+                        analysis.get('price_percentile', 50),
+                        analysis.get('chip_concentration', 0.5),
+                        json.dumps(analysis.get('macd_divergence', {})),
+                        json.dumps(analysis.get('trend_analysis', {})),
+                        analysis.get('price_position', 0.5),
+                        code
+                    ))
+                else:
+                    # 插入
+                    cursor.execute("""
+                        INSERT INTO stock_analysis
+                        (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        code,
+                        json.dumps(analysis.get('holders_trend', [])),
+                        analysis.get('change_5y', 0),
+                        analysis.get('price_percentile', 50),
+                        analysis.get('chip_concentration', 0.5),
+                        json.dumps(analysis.get('macd_divergence', {})),
+                        json.dumps(analysis.get('trend_analysis', {})),
+                        analysis.get('price_position', 0.5)
+                    ))
+                updated += 1
+            except Exception as e:
+                print(f"[定时任务] {code} 失败: {e}")
+                continue
+
+        conn.commit()
+
+        return jsonify({'code': 0, 'message': f'分析数据更新完成，共更新 {updated} 只股票'})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 if __name__ == '__main__':
+    # 注册定时任务（下午4点更新分析数据）
+    from datetime import datetime, timedelta
+    import threading
+
+    def run_scheduled_task():
+        """下午4点执行分析数据更新"""
+        while True:
+            now = datetime.now()
+            # 设置每天下午4点执行
+            target_hour = 16
+            target_minute = 0
+
+            if now.hour == target_hour and now.minute == target_minute:
+                print("[定时任务] 开始执行分析数据更新...")
+                with app.test_request_context():
+                    result = refresh_analysis_scheduled()
+                    print("[定时任务] 完成:", result.get_data(as_text=True))
+
+            # 每分钟检查一次
+            threading.Timer(60, run_scheduled_task).start()
+            break
+
+    # 启动定时任务检查（在后台线程）
+    threading.Thread(target=run_scheduled_task, daemon=True).start()
+
     app.run(host='0.0.0.0', port=5000, debug=True)

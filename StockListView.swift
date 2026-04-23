@@ -200,9 +200,9 @@ struct StockCard: View {
                 color: colorForShareholder(shareholderTrendValue())
             )
 
-            // 底背离指标 - 显示具体级别
+            // 底背离指标 - 用圆点数量表示背离级别
             SortMetricView(
-                title: "背离",
+                title: "背",
                 value: divergenceDisplayText(),
                 isHighlighted: sortOption == .bottomDivergence,
                 color: colorForDivergence()
@@ -283,11 +283,12 @@ struct StockCard: View {
     // 获取背离级别显示文本
     func divergenceDisplayText() -> String {
         guard let div = stock.macd_divergence else { return "-" }
-        var levels: [String] = []
-        if div.monthly == true { levels.append("月") }
-        if div.weekly == true { levels.append("周") }
-        if div.daily == true { levels.append("日") }
-        return levels.isEmpty ? "-" : levels.joined()
+        var count = 0
+        if div.monthly == true { count += 1 }
+        if div.weekly == true { count += 1 }
+        if div.daily == true { count += 1 }
+        if count == 0 { return "-" }
+        return String(repeating: "●", count: count)
     }
 
     // 背离颜色
@@ -347,7 +348,7 @@ struct SortMetricView: View {
                 .font(.system(size: 10))
                 .foregroundColor(isHighlighted ? color : .gray)
         }
-        .frame(width: 40)
+        .frame(width: 44)
         .padding(.vertical, 4)
         .background(isHighlighted ? color.opacity(0.2) : Color.clear)
         .cornerRadius(6)

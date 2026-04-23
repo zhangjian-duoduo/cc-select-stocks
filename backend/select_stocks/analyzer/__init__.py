@@ -6,15 +6,68 @@
 
 import pandas as pd
 import numpy as np
+import pymysql
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
+
+
+# 数据库配置
+DB_CONFIG = {
+    'host': 'localhost',
+    'user': 'root',
+    'password': '',
+    'database': 'select_stocks',
+    'charset': 'utf8mb4'
+}
+
+def get_db():
+    """获取数据库连接"""
+    return pymysql.connect(**DB_CONFIG)
 
 
 class TechnicalAnalyzer:
     """技术分析器"""
 
-    def __init__(self, data_fetcher):
+    def __init__(self, data_fetcher, use_local_kline=True):
         self.df = data_fetcher
+        self.use_local_kline = use_local_kline
+
+    def load_kline_from_db(self, stock_code: str, period: str = 'daily', years: int = 10) -> Optional[pd.DataFrame]:
+        """从本地数据库加载K线数据"""
+        if not self.use_local_kline:
+            return None
+
+        try:
+            conn = get_db()
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+            # 计算起始日期
+            start_date = (datetime.now() - timedelta(days=years*365)).strftime('%Y-%m-%d')
+            end_date = datetime.now().strftime('%Y-%m-%d')
+
+            cursor.execute("""
+                SELECT code, date, open, high, low, close, volume, amount
+                FROM stock_kline
+                WHERE code = %s AND period = %s AND date >= %s AND date <= %s
+                ORDER BY date
+            """, (stock_code, period, start_date, end_date))
+
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            if not rows:
+                return None
+
+            df = pd.DataFrame(rows)
+            # 确保日期列是datetime类型
+            df['date'] = pd.to_datetime(df['date'])
+
+            return df
+
+        except Exception as e:
+            print(f"[本地K线] 加载失败: {e}")
+            return None
 
     def calculate_macd(self, df: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
         """计算MACD指标"""
@@ -43,10 +96,10 @@ class TechnicalAnalyzer:
             return None
 
     def check_macd_divergence(self, df: pd.DataFrame, periods: List[int] = [5, 20, 60]) -> Dict[str, bool]:
-        """检查MACD底背离"""
+        """检查MACD底背离 - 区分上涨/下跌趋势，只检测底背离"""
         result = {'daily': False, 'weekly': False, 'monthly': False}
 
-        if df is None or len(df) < max(periods) + 10:
+        if df is None or len(df) < 60:
             return result
 
         try:
@@ -54,31 +107,57 @@ class TechnicalAnalyzer:
             if df is None:
                 return result
 
-            for period in periods:
-                if len(df) < period + 5:
+            # 使用多个周期检测
+            test_periods = [20, 60, 120]  # 日、周、月周期对应的回看天数
+
+            for period in test_periods:
+                if len(df) < period + 30:
                     continue
 
-                recent = df.tail(period + 5)
-
-                # 找最近N个低点
+                recent = df.tail(period + 30)
                 prices = recent['close'].values
                 difs = recent['dif'].values
+                dea = recent['dea'].values if 'dea' in recent.columns else recent.get('macd', difs)
 
-                # 检查最近是否有底背离
-                min_idx = len(prices) - 1
-                for i in range(len(prices) - 2, max(0, len(prices) - period) - 1, -1):
-                    # 价格创新低
-                    if prices[i] < min(prices[i+1:]):
-                        # DIF未创新低(或者有上升趋势)
-                        if difs[i] > min(difs[i+1:]):
-                            # 找到底背离
-                            if period == 5:
-                                result['daily'] = True
-                            elif period == 20:
-                                result['weekly'] = True
-                            else:
-                                result['monthly'] = True
-                            break
+                if len(prices) < 40:
+                    continue
+
+                # 判断整体趋势：比较前半段和后半段的平均价格
+                mid = len(prices) // 2
+                first_half_avg = sum(prices[:mid]) / mid
+                second_half_avg = sum(prices[mid:]) / (len(prices) - mid)
+
+                is_downtrend = second_half_avg < first_half_avg * 0.95  # 后半段明显低于前半段
+
+                if not is_downtrend:
+                    continue  # 只在下跌趋势中检测底背离
+
+                # 找最近的两个明显低点
+                low_points = []
+                for i in range(10, len(prices) - 10):
+                    # 检查是否是局部最低点
+                    if (prices[i] < prices[i-1] and prices[i] < prices[i+1] and
+                        prices[i] < prices[i-2] and prices[i] < prices[i+2]):
+                        low_points.append((i, prices[i], difs[i]))
+
+                if len(low_points) < 2:
+                    continue
+
+                # 比较最近的两个低点
+                last_low_idx, last_low_price, last_low_dif = low_points[-1]
+                prev_low_idx, prev_low_price, prev_low_dif = low_points[-2]
+
+                # 底背离：价格创新低，但DIF没有创新低（或明显抬高）
+                if last_low_price < prev_low_price * 0.98:  # 价格创新低
+                    if last_low_dif >= prev_low_dif * 0.9:  # DIF没有明显创新低
+                        # 找到日线级别的底背离
+                        if period <= 20:
+                            result['daily'] = True
+                        elif period <= 60:
+                            result['weekly'] = True
+                        else:
+                            result['monthly'] = True
+                        break
 
         except Exception as e:
             print(f"[MACD背离检查] 失败: {e}")
@@ -440,11 +519,14 @@ class TechnicalAnalyzer:
         """完整的股票分析"""
         print(f"[分析] {stock_code}")
 
-        end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=365*5)).strftime('%Y%m%d')
+        # 优先从本地数据库获取K线数据
+        daily_df = self.load_kline_from_db(stock_code, 'daily', years=10)
 
-        # 获取日K数据
-        daily_df = self.df.fetch_with_fallback('get_stock_daily', stock_code, start_date, end_date)
+        # 如果本地没有，尝试从外部获取
+        if daily_df is None or len(daily_df) < 100:
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=365*5)).strftime('%Y%m%d')
+            daily_df = self.df.fetch_with_fallback('get_stock_daily', stock_code, start_date, end_date)
 
         # MACD底背离
         macd_div = self.check_macd_divergence(daily_df) if daily_df is not None else {}
