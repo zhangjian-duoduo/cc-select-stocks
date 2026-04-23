@@ -185,49 +185,102 @@ struct StockCard: View {
                 color: colorForShareholder(shareholderTrendValue())
             )
 
-            // 底背离指标
+            // 底背离指标 - 显示具体级别
             SortMetricView(
                 title: "背离",
-                value: (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? "是" : "否",
+                value: divergenceDisplayText(),
                 isHighlighted: sortOption == .bottomDivergence,
-                color: (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? Color(hex: "4CAF50") : Color.gray
+                color: colorForDivergence()
             )
         }
     }
 
     private func calculateScore() -> String {
-        let confidence = trendConfidence()
-        let chipScore = (stock.chip_concentration ?? 50) / 100
-        let valuationScore = 1 - ((stock.price_percentile ?? 50) / 100)
-        let divergenceScore: Double = (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1.0 : 0.0
-        let total = confidence * 0.4 + chipScore * 0.2 + valuationScore * 0.2 + divergenceScore * 0.2
-        return String(format: "%.1f", total * 100)
+        // 与StockViewModel保持一致的评分算法
+        // 1. 趋势得分 (30%)
+        let trendScore = trendScoreValue()
+
+        // 2. 估值得分 (25%)
+        let pricePct = stock.price_percentile ?? 50
+        let valuationScore = (100 - pricePct) / 100.0
+
+        // 3. 筹码得分 (20%)
+        let chipScore = (stock.chip_concentration ?? 50) / 100.0
+
+        // 4. 股东变化得分 (15%)
+        let holderPct = shareholderChangePercent()
+        let holderScore: Double
+        if holderPct < -10 {
+            holderScore = 1.0
+        } else if holderPct < 0 {
+            holderScore = 0.7
+        } else if holderPct < 20 {
+            holderScore = 0.4
+        } else {
+            holderScore = 0.1
+        }
+
+        // 5. 背离得分 (10%)
+        var divergenceScore: Double = 0
+        if stock.macd_divergence?.monthly == true { divergenceScore += 0.5 }
+        if stock.macd_divergence?.weekly == true { divergenceScore += 0.3 }
+        if stock.macd_divergence?.daily == true { divergenceScore += 0.2 }
+
+        let total = trendScore * 0.30 + valuationScore * 0.25 + chipScore * 0.20 + holderScore * 0.15 + divergenceScore * 0.10
+        return String(format: "%.0f", min(1.0, max(0.0, total)) * 100)
     }
 
-    private func trendConfidence() -> Double {
+    private func trendScoreValue() -> Double {
         guard let t = stock.trend_analysis else { return 0.5 }
         switch t.short {
-        case "上升", "强": return 0.8
-        case "横盘": return 0.5
-        case "下降", "弱": return 0.2
+        case "上涨趋势": return 1.0
+        case "震荡": return 0.6
+        case "下跌趋势": return 0.2
         default: return 0.5
         }
     }
 
-    private func shareholderTrendValue() -> String {
-        guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
-        let recent = trend.suffix(3)
-        guard let first = recent.first?.holders, let last = recent.last?.holders else { return "-" }
-        let diff = last - first
-        if first > 0 {
-            let pct = Double(diff) / Double(first) * 100
-            if pct > 0 {
-                return "+\(Int(pct))%"
-            } else {
-                return "\(Int(pct))%"
-            }
+    private func shareholderChangePercent() -> Double {
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
+        let oldest = trend.last?.holders ?? 0
+        let newest = trend.first?.holders ?? 0
+        if oldest > 0 {
+            return Double(newest - oldest) / Double(oldest) * 100
         }
-        return "-"
+        return 0
+    }
+
+    private func shareholderTrendValue() -> String {
+        // 显示5年来股东人数变化百分比
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
+        let oldest = trend.last?.holders ?? 0
+        let newest = trend.first?.holders ?? 0
+        guard oldest > 0 else { return "-" }
+        let pct = Double(newest - oldest) / Double(oldest) * 100
+        if pct > 0 {
+            return "+\(String(format: "%.1f", pct))%"
+        } else {
+            return "\(String(format: "%.1f", pct))%"
+        }
+    }
+
+    // 获取背离级别显示文本
+    private func divergenceDisplayText() -> String {
+        guard let div = stock.macd_divergence else { return "-" }
+        var levels: [String] = []
+        if div.daily == true { levels.append("日") }
+        if div.weekly == true { levels.append("周") }
+        if div.monthly == true { levels.append("月") }
+        return levels.isEmpty ? "-" : levels.joined(separator: "/") + "背"
+    }
+
+    // 背离颜色
+    private func colorForDivergence() -> Color {
+        guard let div = stock.macd_divergence else { return .gray }
+        if div.monthly == true { return Color(hex: "4CAF50") }  // 月背离最强
+        else if div.weekly == true { return Color(hex: "1E88E5") }
+        else if div.daily == true { return Color(hex: "FFC107") }
+        else { return .gray }
     }
 
     private func colorForPosition(_ position: Double?) -> Color {

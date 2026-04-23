@@ -115,32 +115,97 @@ class StockViewModel: ObservableObject {
         case .chip:
             return stock.chip_concentration ?? 0
         case .shareholder:
+            // 股东人数变化百分比（5年趋势）
             guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-            let recent = trend.suffix(3)
-            let first = recent.first?.holders ?? 0
-            let last = recent.last?.holders ?? 0
-            return Double(first - last)
+            let oldest = trend.last?.holders ?? 0
+            let newest = trend.first?.holders ?? 0
+            if oldest > 0 {
+                return Double(newest - oldest) / Double(oldest) * 100
+            }
+            return 0
         case .bottomDivergence:
+            // 有任何背离返回1，否则0
             return (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1 : 0
         }
     }
 
+    // 计算股东人数变化百分比
+    func shareholderChangePercent(_ stock: Stock) -> Double {
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
+        let oldest = trend.last?.holders ?? 0
+        let newest = trend.first?.holders ?? 0
+        if oldest > 0 {
+            return Double(newest - oldest) / Double(oldest) * 100
+        }
+        return 0
+    }
+
+    // 获取背离级别文本
+    func divergenceText(_ stock: Stock) -> String {
+        guard let div = stock.macd_divergence else { return "-" }
+        var levels: [String] = []
+        if div.daily == true { levels.append("日") }
+        if div.weekly == true { levels.append("周") }
+        if div.monthly == true { levels.append("月") }
+        return levels.isEmpty ? "-" : levels.joined(separator: "/")
+    }
+
     private func calculateScore(_ stock: Stock) -> Double {
-        let confidence = Double(trendConfidence(stock.trend_analysis)) / 100.0
+        // 优化后的评分算法
+        // 核心逻辑：低估值+高筹码集中+趋势向上+底背离 = 高分
+
+        // 1. 趋势得分 (30%) - 短期趋势最重要
+        let trendScore = trendScoreValue(stock.trend_analysis)
+
+        // 2. 估值得分 (25%) - 价格分位越低越好
+        let pricePct = stock.price_percentile ?? 50
+        let valuationScore = (100 - pricePct) / 100.0
+
+        // 3. 筹码得分 (20%) - 筹码集中度越高越好
         let chipVal = stock.chip_concentration ?? 50
         let chipScore = chipVal / 100.0
-        let peVal = stock.price_percentile ?? 50
-        let valuationScore = 1.0 - (peVal / 100.0)
-        let divergenceScore: Double = (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1.0 : 0.0
-        return confidence * 0.4 + chipScore * 0.2 + valuationScore * 0.2 + divergenceScore * 0.2
+
+        // 4. 股东变化得分 (15%) - 股东人数减少说明筹码集中
+        let holderChange = shareholderChangePercent(stock)
+        let holderScore: Double
+        if holderChange < -10 {
+            holderScore = 1.0  // 股东减少>10%，高分
+        } else if holderChange < 0 {
+            holderScore = 0.7
+        } else if holderChange < 20 {
+            holderScore = 0.4
+        } else {
+            holderScore = 0.1  // 股东大幅增加，低分
+        }
+
+        // 5. 背离得分 (10%) - 有底背离是加分项
+        var divergenceScore: Double = 0
+        if stock.macd_divergence?.monthly == true { divergenceScore += 0.5 }
+        if stock.macd_divergence?.weekly == true { divergenceScore += 0.3 }
+        if stock.macd_divergence?.daily == true { divergenceScore += 0.2 }
+
+        // 综合评分
+        let total = trendScore * 0.30 + valuationScore * 0.25 + chipScore * 0.20 + holderScore * 0.15 + divergenceScore * 0.10
+        return min(1.0, max(0.0, total))
+    }
+
+    private func trendScoreValue(_ trend: Stock.TrendAnalysis?) -> Double {
+        guard let t = trend else { return 0.5 }
+        // 短期趋势权重最高
+        switch t.short {
+        case "上涨趋势": return 1.0
+        case "震荡": return 0.6
+        case "下跌趋势": return 0.2
+        default: return 0.5
+        }
     }
 
     private func trendConfidence(_ trend: Stock.TrendAnalysis?) -> Double {
         guard let t = trend else { return 50 }
         switch t.short {
-        case "上升", "强": return 80
-        case "横盘": return 50
-        case "下降", "弱": return 20
+        case "上涨趋势": return 80
+        case "震荡": return 50
+        case "下跌趋势": return 20
         default: return 50
         }
     }
