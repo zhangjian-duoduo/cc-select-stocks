@@ -152,46 +152,57 @@ struct StockCard: View {
 
     @ViewBuilder
     private var sortIndicatorView: some View {
-        HStack(spacing: 16) {
-            // 位置指标
-            SortMetricView(
-                title: "位置",
-                value: stock.price_position.map { "\(Int($0 * 100))%" } ?? "-",
-                isHighlighted: sortOption == .position,
-                color: colorForPosition(stock.price_position)
-            )
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                // 涨跌指标
+                SortMetricView(
+                    title: "涨跌",
+                    value: String(format: "%.2f%%", stock.change_pct ?? 0),
+                    isHighlighted: sortOption == .dailyChange,
+                    color: (stock.change_pct ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
+                )
 
-            // 评分指标
-            SortMetricView(
-                title: "评分",
-                value: calculateScore(),
-                isHighlighted: sortOption == .score,
-                color: colorForScore(calculateScore())
-            )
+                // 位置指标
+                SortMetricView(
+                    title: "位置",
+                    value: stock.price_position.map { "\(Int($0 * 100))%" } ?? "-",
+                    isHighlighted: sortOption == .position,
+                    color: colorForPosition(stock.price_position)
+                )
 
-            // 筹码指标
-            SortMetricView(
-                title: "筹码",
-                value: stock.chip_concentration.map { String(format: "%.0f", $0 * 100) + "%" } ?? "-",
-                isHighlighted: sortOption == .chip,
-                color: colorForChip(stock.chip_concentration)
-            )
+                // 评分指标
+                SortMetricView(
+                    title: "评分",
+                    value: calculateScore(),
+                    isHighlighted: sortOption == .score,
+                    color: colorForScore(calculateScore())
+                )
 
-            // 股东指标
-            SortMetricView(
-                title: "股东",
-                value: shareholderTrendValue(),
-                isHighlighted: sortOption == .shareholder,
-                color: colorForShareholder(shareholderTrendValue())
-            )
+                // 筹码指标
+                SortMetricView(
+                    title: "筹码",
+                    value: stock.chip_concentration.map { String(format: "%.0f", $0 * 100) + "%" } ?? "-",
+                    isHighlighted: sortOption == .chip,
+                    color: colorForChip(stock.chip_concentration)
+                )
 
-            // 底背离指标 - 显示具体级别
-            SortMetricView(
-                title: "背离",
-                value: divergenceDisplayText(),
-                isHighlighted: sortOption == .bottomDivergence,
-                color: colorForDivergence()
-            )
+                // 股东指标
+                SortMetricView(
+                    title: "股东",
+                    value: shareholderTrendValue(),
+                    isHighlighted: sortOption == .shareholder,
+                    color: colorForShareholder(shareholderTrendValue())
+                )
+
+                // 底背离指标 - 显示具体级别
+                SortMetricView(
+                    title: "背离",
+                    value: divergenceDisplayText(),
+                    isHighlighted: sortOption == .bottomDivergence,
+                    color: colorForDivergence()
+                )
+            }
+            .padding(.horizontal, 8)
         }
     }
 
@@ -321,15 +332,20 @@ struct SortMetricView: View {
     var body: some View {
         VStack(spacing: 2) {
             Text(value)
-                .font(.caption)
+                .font(.system(size: 11))
                 .fontWeight(isHighlighted ? .bold : .regular)
                 .foregroundColor(isHighlighted ? color : .white)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
 
             Text(title)
-                .font(.caption2)
+                .font(.system(size: 10))
                 .foregroundColor(isHighlighted ? color : .gray)
         }
-        .frame(minWidth: 40)
+        .frame(width: 50)
+        .padding(.vertical, 4)
+        .background(isHighlighted ? color.opacity(0.2) : Color.clear)
+        .cornerRadius(6)
     }
 }
 
