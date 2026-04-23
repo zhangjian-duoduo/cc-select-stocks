@@ -36,7 +36,7 @@ def get_stocks():
     try:
         cursor.execute("""
             SELECT s.code, s.name, s.price, s.change_pct, s.selected_at,
-                   a.holders_trend, a.change_5y, a.pe_percentile, a.chip_concentration,
+                   a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                    a.macd_divergence, a.trend_analysis, a.price_position
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
@@ -85,7 +85,7 @@ def get_stocks():
                 else:
                     row[json_field] = None
             # 处理数值字段
-            for num_field in ['pe_percentile', 'chip_concentration', 'change_5y', 'price_position']:
+            for num_field in ['price_percentile', 'chip_concentration', 'change_5y', 'price_position']:
                 if row.get(num_field):
                     try:
                         row[num_field] = float(row[num_field])
@@ -131,7 +131,7 @@ def get_stock_detail(stock_code):
         if analysis:
             result['holders_trend'] = analysis.get('holders_trend', '[]')
             result['change_5y'] = analysis.get('change_5y', 0)
-            result['pe_percentile'] = analysis.get('pe_percentile', 50)
+            result['price_percentile'] = analysis.get('price_percentile', 50)
             result['chip_concentration'] = analysis.get('chip_concentration', 0.5)
             result['macd_divergence'] = analysis.get('macd_divergence', '{}')
             result['trend_analysis'] = analysis.get('trend_analysis', '{}')
@@ -181,13 +181,13 @@ def refresh_stocks():
             analysis = analyzer.analyze_stock(stock['code'])
             cursor.execute("""
                 INSERT INTO stock_analysis
-                (code, holders_trend, change_5y, pe_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
+                (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 stock['code'],
                 json.dumps(analysis.get('holders_trend', [])),
                 analysis.get('change_5y', 0),
-                analysis.get('pe_percentile', 50),
+                analysis.get('price_percentile', 50),
                 analysis.get('chip_concentration', 0.5),
                 json.dumps(analysis.get('macd_divergence', {})),
                 json.dumps(analysis.get('trend_analysis', {})),

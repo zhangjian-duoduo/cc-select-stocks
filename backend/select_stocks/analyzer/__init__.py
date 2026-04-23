@@ -86,14 +86,13 @@ class TechnicalAnalyzer:
         return result
 
     def calculate_chip_concentration(self, stock_code: str) -> float:
-        """计算筹码集中度 (基于价格波动)"""
+        """计算筹码集中度 - 多维度综合算法"""
         try:
-            # 获取日K数据
             end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
 
             daily_df = self.df.fetch_with_fallback('get_stock_daily', stock_code, start_date, end_date)
-            if daily_df is None or len(daily_df) < 60:
+            if daily_df is None or len(daily_df) < 30:
                 return 0.5
 
             daily_df = daily_df.copy()
@@ -101,41 +100,157 @@ class TechnicalAnalyzer:
             daily_df['volume'] = pd.to_numeric(daily_df['volume'], errors='coerce')
             daily_df = daily_df.dropna(subset=['close', 'volume'])
 
-            if len(daily_df) < 60:
+            if len(daily_df) < 30:
                 return 0.5
 
-            # 计算最近60日的涨跌
-            # 如果大部分时间上涨且缩量，说明筹码集中
-            recent = daily_df.tail(60).copy()
-            recent['change'] = recent['close'].pct_change()
+            # ===== 方法1: 价格分布法 (权重40%) =====
+            score1 = self._price_distribution_score(daily_df)
 
-            # 上涨日的成交量均值
+            # ===== 方法2: 量价关系法 (权重40%) =====
+            score2 = self._volume_price_score(daily_df)
+
+            # ===== 方法3: 换手率振幅法 (权重20%) =====
+            score3 = self._turnover_amplitude_score(daily_df)
+
+            # 综合评分
+            concentration = score1 * 0.4 + score2 * 0.4 + score3 * 0.2
+            return round(min(0.95, max(0.05, concentration)), 2)
+
+        except Exception as e:
+            print(f"[筹码集中度] 计算失败: {e}")
+            return 0.5
+
+    def _price_distribution_score(self, df: pd.DataFrame) -> float:
+        """方法1: 价格分布法 - 找出成交量密集区"""
+        try:
+            recent = df.tail(60).copy()
+            current_price = recent['close'].iloc[-1]
+
+            # 计算价格区间
+            min_price = recent['close'].min()
+            max_price = recent['close'].max()
+
+            if max_price <= min_price:
+                return 0.5
+
+            # 将价格分成10个区间
+            price_range = max_price - min_price
+            bin_size = price_range / 10
+
+            # 统计每个区间的成交量
+            volume_bins = {}
+            for _, row in recent.iterrows():
+                price = row['close']
+                vol = row['volume']
+                # 计算价格落在哪个区间
+                bin_idx = int((price - min_price) / bin_size) if bin_size > 0 else 5
+                bin_idx = min(9, max(0, bin_idx))
+                volume_bins[bin_idx] = volume_bins.get(bin_idx, 0) + vol
+
+            if not volume_bins:
+                return 0.5
+
+            # 找出成交量最大的区间
+            max_vol_bin = max(volume_bins, key=volume_bins.get)
+            max_vol = volume_bins[max_vol_bin]
+
+            # 计算当前价格落在哪个区间
+            current_bin = int((current_price - min_price) / bin_size) if bin_size > 0 else 5
+            current_bin = min(9, max(0, current_bin))
+
+            # 当前价格在密集区 -> 筹码集中
+            # 距离密集区越远 -> 筹码越分散
+            distance = abs(current_bin - max_vol_bin)
+
+            if distance <= 1:
+                # 当前价格在成交量最大区间附近
+                return 0.7 + (max_vol_bin == current_bin) * 0.15
+            elif distance <= 2:
+                return 0.5 + (1 - distance/2) * 0.2
+            else:
+                return 0.3
+
+        except Exception as e:
+            print(f"[价格分布] 失败: {e}")
+            return 0.5
+
+    def _volume_price_score(self, df: pd.DataFrame) -> float:
+        """方法2: 量价关系法 - 缩量上涨=主力控盘"""
+        try:
+            recent = df.tail(60).copy()
+            recent['change'] = recent['close'].pct_change()
+            recent['volume_change'] = recent['volume'].pct_change()
+
+            # 上涨日缩量 = 主力控盘 (筹码集中)
+            # 下跌日放量 = 主力出货 (筹码分散)
+
             up_days = recent[recent['change'] > 0]
             down_days = recent[recent['change'] < 0]
 
             if len(up_days) == 0 or len(down_days) == 0:
                 return 0.5
 
-            up_vol = up_days['volume'].mean()
-            down_vol = down_days['volume'].mean()
+            avg_vol_up = up_days['volume'].mean()
+            avg_vol_down = down_days['volume'].mean()
 
-            # 如果上涨时缩量，下跌时放量，说明筹码集中
-            if up_vol > 0 and down_vol > 0:
-                vol_ratio = up_vol / down_vol
-                # 缩量上涨 = 筹码集中 (0.6-0.9)
-                # 放量上涨 = 筹码分散 (<0.6)
-                # 缩量下跌 = 惜售 (0.6-0.9)
-                if vol_ratio < 0.7:
-                    return round(0.3 + (0.7 - vol_ratio), 2)  # 0.3-0.7 分散
-                elif vol_ratio < 1.0:
-                    return round(0.5 + (1.0 - vol_ratio) * 2, 2)  # 0.5-0.9 中等
-                else:
-                    return round(min(0.95, 0.7 + (vol_ratio - 1.0) * 0.2), 2)  # 0.7-0.95 集中
+            # 计算平均价格
+            avg_price_up = up_days['close'].mean()
+            avg_price_down = down_days['close'].mean()
 
-            return 0.5
+            # 量比 = 上涨均量 / 下跌均量
+            vol_ratio = avg_vol_up / avg_vol_down if avg_vol_down > 0 else 1.0
+
+            # 涨幅 = 上涨幅度 / 下跌幅度
+            avg_change_up = up_days['change'].mean() if len(up_days) > 0 else 0
+            avg_change_down = abs(down_days['change'].mean()) if len(down_days) > 0 else 0
+
+            # 上涨日缩量 + 下跌日放量 = 筹码集中
+            # 理想情况: 量比 < 0.7 且 涨幅 > 下跌幅度
+            if vol_ratio < 0.7:
+                return 0.8
+            elif vol_ratio < 0.85:
+                return 0.65
+            elif vol_ratio < 1.0:
+                return 0.55
+            elif vol_ratio < 1.3:
+                return 0.45
+            else:
+                return 0.3
 
         except Exception as e:
-            print(f"[筹码集中度] 计算失败: {e}")
+            print(f"[量价关系] 失败: {e}")
+            return 0.5
+
+    def _turnover_amplitude_score(self, df: pd.DataFrame) -> float:
+        """方法3: 换手率振幅法"""
+        try:
+            recent = df.tail(60).copy()
+
+            # 平均换手率 (需要市值数据，这里用成交量/总股本估算)
+            # 简化: 用成交量与流通市值的比例
+            avg_volume = recent['volume'].mean()
+
+            # 振幅 = (最高 - 最低) / 最低
+            highest = recent['close'].max()
+            lowest = recent['close'].min()
+            amplitude = (highest - lowest) / lowest if lowest > 0 else 0
+
+            # 价格波动程度
+            price_std = recent['close'].std() / recent['close'].mean()
+
+            # 低换手 + 低振幅 = 筹码集中
+            # 高换手 + 高振幅 = 筹码分散
+            if amplitude < 0.1:  # 低振幅
+                return 0.7 + (1 - amplitude) * 0.2
+            elif amplitude < 0.2:
+                return 0.55
+            elif amplitude < 0.3:
+                return 0.45
+            else:
+                return 0.35
+
+        except Exception as e:
+            print(f"[换手振幅] 失败: {e}")
             return 0.5
 
     def analyze_trend(self, df: pd.DataFrame) -> Dict[str, str]:
@@ -195,56 +310,39 @@ class TechnicalAnalyzer:
         return result
 
     def get_holder_trend(self, stock_code: str, years: int = 5) -> List[Dict]:
-        """获取股东人数趋势 (从东方财富获取真实数据)"""
+        """获取股东人数趋势 (使用akshare东方财富数据)"""
         try:
-            import requests
-            import re
+            import akshare as ak
 
-            # 转换股票代码格式: 000001 -> 000001.SZ
-            if stock_code.startswith('6'):
-                suffix = 'SH'
-            else:
-                suffix = 'SZ'
-            secucode = f"{stock_code}.{suffix}"
+            # 使用akshare获取股东户数数据
+            df = ak.stock_zh_a_gdhs_detail_em(symbol=stock_code)
 
-            # 东方财富API
-            url = 'https://datacenter-web.eastmoney.com/api/data/v1/get'
-            params = {
-                'sortColumns': 'END_DATE',
-                'sortTypes': '-1',
-                'pageSize': '20',  # 最近20个季度
-                'pageNumber': '1',
-                'reportName': 'RPT_HOLDERNUM_DET',
-                'columns': 'END_DATE,HOLDER_NUM',
-                'filter': f'(SECUCODE="{secucode}")'
-            }
+            if df is None or len(df) == 0:
+                return []
 
-            r = requests.get(url, params=params, timeout=15)
-            data = r.json()
+            # 按日期排序，最新的在前面
+            df = df.sort_values('股东户数统计截止日', ascending=False)
 
-            if data.get('success') and data.get('result'):
-                holder_data = data['result'].get('data', [])
-                result = []
-                for item in holder_data:
-                    date_str = item.get('END_DATE', '')
-                    # 提取日期字符串
-                    if date_str:
-                        date_match = re.search(r'(\d{4})-(\d{2})-\d{2}', str(date_str))
-                        if date_match:
-                            year, month = date_match.groups()
-                            quarter = (int(month) - 1) // 3 + 1
-                            date_formatted = f"{year}Q{quarter}"
-                        else:
-                            date_formatted = str(date_str)[:7]
-                    else:
-                        date_formatted = ''
+            result = []
+            for _, row in df.head(20).iterrows():  # 最多20期
+                date_str = str(row.get('股东户数统计截止日', ''))
+                holders = row.get('股东户数-本次', 0)
 
-                    result.append({
-                        'date': date_formatted,
-                        'holders': item.get('HOLDER_NUM', 0)
-                    })
-                return result
-            return []
+                # 转换日期格式为季度
+                if date_str and len(date_str) >= 10:
+                    year = date_str[:4]
+                    month = int(date_str[5:7])
+                    quarter = (month - 1) // 3 + 1
+                    date_formatted = f"{year}Q{quarter}"
+                else:
+                    date_formatted = date_str
+
+                result.append({
+                    'date': date_formatted,
+                    'holders': int(holders) if holders else 0
+                })
+
+            return result
 
         except Exception as e:
             print(f"[股东人数趋势] 获取失败: {e}")
@@ -300,18 +398,8 @@ class TechnicalAnalyzer:
             print(f"[价格位置] 失败: {e}")
             return 0.5
 
-            if start_price == 0:
-                return 0.0
-
-            change = (end_price / start_price - 1) * 100
-            return round(change, 2)
-
-        except Exception as e:
-            print(f"[5年涨跌] 计算失败: {e}")
-            return 0.0
-
-    def get_pe_percentile(self, stock_code: str) -> float:
-        """获取估值历史百分位 (基于PE估算)"""
+    def get_price_percentile(self, stock_code: str) -> float:
+        """获取价格历史分位 (基于5年价格位置估算)"""
         try:
             # 获取5年日K数据
             end_date = datetime.now().strftime('%Y%m%d')
@@ -361,20 +449,20 @@ class TechnicalAnalyzer:
         # MACD底背离
         macd_div = self.check_macd_divergence(daily_df) if daily_df is not None else {}
 
-        # 筹码集中度
+        # 筹码集中度 (多维度综合算法)
         chip_conc = self.calculate_chip_concentration(stock_code)
 
         # 趋势分析
         trend = self.analyze_trend(daily_df) if daily_df is not None else {}
 
-        # 股东人数趋势
+        # 股东人数趋势 (从东方财富获取真实数据)
         holders_trend = self.get_holder_trend(stock_code)
 
         # 5年涨跌
         change_5y = self.get_change_5y(stock_code)
 
-        # 估值百分位
-        pe_percentile = self.get_pe_percentile(stock_code)
+        # 价格历史分位 (基于5年价格位置估算，非真实PE)
+        price_percentile = self.get_price_percentile(stock_code)
 
         # 价格位置
         price_position = self.get_price_position(stock_code)
@@ -383,7 +471,7 @@ class TechnicalAnalyzer:
             'code': stock_code,
             'holders_trend': holders_trend,
             'change_5y': change_5y,
-            'pe_percentile': pe_percentile,
+            'price_percentile': price_percentile,
             'chip_concentration': chip_conc,
             'macd_divergence': macd_div,
             'trend_analysis': trend,

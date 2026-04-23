@@ -129,7 +129,7 @@ class StockViewModel: ObservableObject {
         let confidence = Double(trendConfidence(stock.trend_analysis)) / 100.0
         let chipVal = stock.chip_concentration ?? 50
         let chipScore = chipVal / 100.0
-        let peVal = stock.pe_percentile ?? 50
+        let peVal = stock.price_percentile ?? 50
         let valuationScore = 1.0 - (peVal / 100.0)
         let divergenceScore: Double = (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1.0 : 0.0
         return confidence * 0.4 + chipScore * 0.2 + valuationScore * 0.2 + divergenceScore * 0.2

@@ -198,7 +198,7 @@ struct StockCard: View {
     private func calculateScore() -> String {
         let confidence = trendConfidence()
         let chipScore = (stock.chip_concentration ?? 50) / 100
-        let valuationScore = 1 - ((stock.pe_percentile ?? 50) / 100)
+        let valuationScore = 1 - ((stock.price_percentile ?? 50) / 100)
         let divergenceScore: Double = (stock.macd_divergence?.daily == true || stock.macd_divergence?.weekly == true || stock.macd_divergence?.monthly == true) ? 1.0 : 0.0
         let total = confidence * 0.4 + chipScore * 0.2 + valuationScore * 0.2 + divergenceScore * 0.2
         return String(format: "%.1f", total * 100)
@@ -426,27 +426,30 @@ struct StockDetailView: View {
                     .cornerRadius(12)
                 }
 
-                // 估值百分位 - 使用Gauge仪表盘
-                if let pe = stock.pe_percentile {
+                // 价格分位 - 使用Gauge仪表盘
+                if let pricePct = stock.price_percentile {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("当前估值历史百分位")
+                        Text("当前价格历史分位")
                             .font(.headline)
                             .foregroundColor(.white)
 
                         HStack {
-                            Gauge(value: pe, in: 0...100) {
-                                Text("PE百分位")
+                            Gauge(value: pricePct, in: 0...100) {
+                                Text("价格分位")
                             } currentValueLabel: {
-                                Text("\(Int(pe))%")
+                                Text("\(Int(pricePct))%")
                                     .font(.title2)
                                     .fontWeight(.bold)
                             }
                             .gaugeStyle(.accessoryCircular)
-                            .tint(valuationColor(pe))
+                            .tint(valuationColor(pricePct))
 
                             VStack(alignment: .leading, spacing: 4) {
-                                valuationLabel(pe)
-                                Text(valuationDescription(pe))
+                                Text("价格分位")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                Text(pricePositionDescription(pricePct))
                                     .font(.caption)
                                     .foregroundColor(.gray)
                             }
@@ -620,12 +623,12 @@ struct StockDetailView: View {
         .foregroundColor(valuationColor(percentile))
     }
 
-    // 估值描述
-    private func valuationDescription(_ percentile: Double) -> String {
+    // 价格位置描述
+    private func pricePositionDescription(_ percentile: Double) -> String {
         if percentile < 20 { return "历史低位，适合布局" }
-        else if percentile < 40 { return "估值偏低，关注机会" }
-        else if percentile < 60 { return "估值合理" }
-        else if percentile < 80 { return "估值偏高，注意风险" }
+        else if percentile < 40 { return "价格偏低，关注机会" }
+        else if percentile < 60 { return "价格合理" }
+        else if percentile < 80 { return "价格偏高，注意风险" }
         else { return "风险较大，谨慎参与" }
     }
 

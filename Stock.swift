@@ -11,7 +11,7 @@ struct Stock: Identifiable, Codable {
     // 额外分析数据
     var holders_trend: [HolderData]?
     var change_5y: Double?
-    var pe_percentile: Double?
+    var price_percentile: Double?
     var chip_concentration: Double?
     var macd_divergence: MACDDivergence?
     var trend_analysis: TrendAnalysis?
