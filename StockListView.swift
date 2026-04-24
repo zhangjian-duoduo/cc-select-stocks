@@ -49,7 +49,8 @@ struct StockListView: View {
             }
         }
         .background(Color(hex: "121212"))
-        .navigationTitle("智能选股")
+        .navigationTitle("智能选股 (\(stockViewModel.filteredStocks.count))")
+        .searchable(text: $stockViewModel.searchText, prompt: "搜索股票代码或名称")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {

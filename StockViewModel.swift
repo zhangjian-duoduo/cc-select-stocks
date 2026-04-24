@@ -19,6 +19,11 @@ class StockViewModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var sortOption: SortOption = .position
     @Published var sortAscending: Bool = false
+    @Published var searchText: String = "" {
+        didSet {
+            applySearch()
+        }
+    }
     @Published var favorites: Set<String> = [] {
         didSet {
             saveFavorites()
@@ -148,6 +153,29 @@ class StockViewModel: ObservableObject {
 
     private func applySort() {
         let sorted = stocks.sorted { stock1, stock2 in
+            let value1 = sortValue(for: stock1)
+            let value2 = sortValue(for: stock2)
+            return sortAscending ? value1 < value2 : value1 > value2
+        }
+        filteredStocks = sorted
+        // Re-apply search after sort change
+        applySearch()
+    }
+
+    private func applySearch() {
+        let baseList: [Stock]
+        if searchText.isEmpty {
+            baseList = stocks
+        } else {
+            let query = searchText.lowercased()
+            baseList = stocks.filter { stock in
+                stock.code.lowercased().contains(query) ||
+                stock.name.lowercased().contains(query)
+            }
+        }
+
+        // Apply sort
+        let sorted = baseList.sorted { stock1, stock2 in
             let value1 = sortValue(for: stock1)
             let value2 = sortValue(for: stock2)
             return sortAscending ? value1 < value2 : value1 > value2
