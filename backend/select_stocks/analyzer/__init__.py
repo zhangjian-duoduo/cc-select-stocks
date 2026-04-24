@@ -24,6 +24,28 @@ def get_db():
     """获取数据库连接"""
     return pymysql.connect(**DB_CONFIG)
 
+def create_holders_table():
+    """创建股东人数表"""
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS stock_holders (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                code VARCHAR(10) NOT NULL,
+                date VARCHAR(10) NOT NULL,  -- 格式: 2025Q1
+                holders INT,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                UNIQUE KEY uk_code_date (code, date),
+                INDEX idx_code (code)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        conn.commit()
+        print("[数据库] 股东人数表创建成功")
+    finally:
+        cursor.close()
+        conn.close()
+
 
 class TechnicalAnalyzer:
     """技术分析器"""
@@ -297,9 +319,9 @@ class TechnicalAnalyzer:
             if not holders_trend or len(holders_trend) < 2:
                 return 0.5  # 无数据时返回中性
 
-            # 比较最近两个季度的股东人数
-            latest_holders = holders_trend[0].get('holders', 0)
-            oldest_holders = holders_trend[-1].get('holders', 0)
+            # 比较最近两个季度的股东人数（数组已按旧到新排列）
+            oldest_holders = holders_trend[0].get('holders', 0)
+            latest_holders = holders_trend[-1].get('holders', 0)
 
             if oldest_holders == 0:
                 return 0.5
@@ -365,13 +387,6 @@ class TechnicalAnalyzer:
                 return 0.20
 
         except:
-            return 0.5
-                return 0.5 + (1 - distance/2) * 0.2
-            else:
-                return 0.3
-
-        except Exception as e:
-            print(f"[价格分布] 失败: {e}")
             return 0.5
 
     def _volume_price_score(self, df: pd.DataFrame) -> float:
@@ -510,21 +525,45 @@ class TechnicalAnalyzer:
         return result
 
     def get_holder_trend(self, stock_code: str, years: int = 5) -> List[Dict]:
-        """获取股东人数趋势 (使用akshare东方财富数据)"""
+        """获取股东人数趋势 - 优先从本地数据库获取
+        返回从旧到新的时间序列（供图表从左到右显示）"""
+
+        # 1. 先从本地数据库获取
+        try:
+            conn = get_db()
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            # 按时间升序排列（旧到新）
+            cursor.execute("""
+                SELECT date, holders FROM stock_holders
+                WHERE code = %s ORDER BY date ASC LIMIT 20
+            """, (stock_code,))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+
+            if rows and len(rows) > 0:
+                result = [{'date': row['date'], 'holders': row['holders']} for row in rows]
+                print(f"[股东人数] 从本地获取 {stock_code}: {len(result)} 条")
+                return result
+        except Exception as e:
+            print(f"[股东人数] 本地获取失败: {e}")
+
+        # 2. 本地没有，从网络获取
         try:
             import akshare as ak
-
-            # 使用akshare获取股东户数数据
             df = ak.stock_zh_a_gdhs_detail_em(symbol=stock_code)
 
             if df is None or len(df) == 0:
                 return []
 
-            # 按日期排序，最新的在前面
+            # 按日期排序
             df = df.sort_values('股东户数统计截止日', ascending=False)
 
             result = []
-            for _, row in df.head(20).iterrows():  # 最多20期
+            conn = get_db()
+            cursor = conn.cursor()
+
+            for _, row in df.head(20).iterrows():
                 date_str = str(row.get('股东户数统计截止日', ''))
                 holders = row.get('股东户数-本次', 0)
 
@@ -537,11 +576,29 @@ class TechnicalAnalyzer:
                 else:
                     date_formatted = date_str
 
+                holders_val = int(holders) if holders else 0
                 result.append({
                     'date': date_formatted,
-                    'holders': int(holders) if holders else 0
+                    'holders': holders_val
                 })
 
+                # 保存到本地数据库
+                try:
+                    cursor.execute("""
+                        INSERT INTO stock_holders (code, date, holders)
+                        VALUES (%s, %s, %s)
+                        ON DUPLICATE KEY UPDATE holders = VALUES(holders)
+                    """, (stock_code, date_formatted, holders_val))
+                except:
+                    pass
+
+            conn.commit()
+            cursor.close()
+            conn.close()
+
+            print(f"[股东人数] 从网络获取 {stock_code}: {len(result)} 条")
+            # 反转结果：从旧到新（供图表从左到右显示）
+            result.reverse()
             return result
 
         except Exception as e:
