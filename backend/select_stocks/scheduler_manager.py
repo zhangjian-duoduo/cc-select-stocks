@@ -150,7 +150,7 @@ def run_stock_selection():
     selector = StockSelector(df)
 
     # 执行选股
-    selected_stocks = selector.select_stocks(limit=100)
+    selected_stocks = selector.select_stocks(limit=5000)
 
     if not selected_stocks:
         print("[定时任务] 选股失败")

@@ -10,6 +10,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
 import time
+import os
 
 # 数据库配置
 DB_CONFIG = {
@@ -57,6 +58,32 @@ def create_kline_table():
 
 def get_all_stock_codes() -> list:
     """获取所有A股代码"""
+    # 优先从本地文件读取
+    local_file = os.path.join(os.path.dirname(__file__), 'stock_codes.txt')
+    if os.path.exists(local_file):
+        try:
+            with open(local_file, 'r') as f:
+                codes = [line.strip() for line in f if line.strip()]
+            if codes:
+                print(f"[本地文件] 读取到 {len(codes)} 只股票")
+                return codes
+        except Exception as e:
+            print(f"[本地文件] 读取失败: {e}")
+
+    # 回退到akshare
+    import akshare as ak
+    try:
+        df = ak.stock_info_a_code_name()
+        stocks = []
+        for _, row in df.iterrows():
+            code = str(row['code']).zfill(6)
+            if code.startswith('6') or code.startswith('0') or code.startswith('3'):
+                stocks.append(code)
+        return stocks
+    except Exception as e:
+        print(f"[akshare] 获取股票列表失败: {e}")
+
+    # 最后回退到baostock
     lg = bs.login()
     if lg.error_code != '0':
         print(f"[baostock] 登录失败: {lg.error_msg}")
@@ -67,7 +94,6 @@ def get_all_stock_codes() -> list:
     while rs.error_code == '0' and rs.next():
         row = rs.get_row_data()
         code = row[0]
-        # 过滤：只要6开头(上海)和0/3开头(深圳)的股票
         if code.startswith('sh.6') or code.startswith('sz.0') or code.startswith('sz.3'):
             stocks.append(code.replace('sh.', '').replace('sz.', ''))
 

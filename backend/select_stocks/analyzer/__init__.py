@@ -165,13 +165,21 @@ class TechnicalAnalyzer:
         return result
 
     def calculate_chip_concentration(self, stock_code: str) -> float:
-        """计算筹码集中度 - 多维度综合算法"""
+        """计算筹码集中度 - 优化版多维度综合算法
+
+        优化点：
+        1. 时间加权：近期成交量权重更大
+        2. 成本区间分析：底部价格区间成交量占比
+        3. 股东人数因子：股东减少=筹码集中
+        4. 移动成本分布：20/80成本线
+        5. 更精细的价格分箱
+        """
         try:
             end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=180)).strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=250)).strftime('%Y%m%d')
 
             daily_df = self.df.fetch_with_fallback('get_stock_daily', stock_code, start_date, end_date)
-            if daily_df is None or len(daily_df) < 30:
+            if daily_df is None or len(daily_df) < 60:
                 return 0.5
 
             daily_df = daily_df.copy()
@@ -179,72 +187,185 @@ class TechnicalAnalyzer:
             daily_df['volume'] = pd.to_numeric(daily_df['volume'], errors='coerce')
             daily_df = daily_df.dropna(subset=['close', 'volume'])
 
-            if len(daily_df) < 30:
+            if len(daily_df) < 60:
                 return 0.5
 
-            # ===== 方法1: 价格分布法 (权重40%) =====
-            score1 = self._price_distribution_score(daily_df)
+            # ===== 方法1: 成本分布法 (权重35%) =====
+            score1 = self._cost_distribution_score(daily_df)
 
-            # ===== 方法2: 量价关系法 (权重40%) =====
-            score2 = self._volume_price_score(daily_df)
+            # ===== 方法2: 时间加权价格分布 (权重25%) =====
+            score2 = self._time_weighted_price_distribution(daily_df)
 
-            # ===== 方法3: 换手率振幅法 (权重20%) =====
-            score3 = self._turnover_amplitude_score(daily_df)
+            # ===== 方法3: 量价配合法 (权重20%) =====
+            score3 = self._volume_price_score(daily_df)
+
+            # ===== 方法4: 股东人数因子 (权重10%) =====
+            score4 = self._holder_number_score(stock_code)
+
+            # ===== 方法5: 移动成本线 (权重10%) =====
+            score5 = self._cost_line_score(daily_df)
 
             # 综合评分
-            concentration = score1 * 0.4 + score2 * 0.4 + score3 * 0.2
+            concentration = score1 * 0.35 + score2 * 0.25 + score3 * 0.20 + score4 * 0.10 + score5 * 0.10
             return round(min(0.95, max(0.05, concentration)), 2)
 
         except Exception as e:
             print(f"[筹码集中度] 计算失败: {e}")
             return 0.5
 
-    def _price_distribution_score(self, df: pd.DataFrame) -> float:
-        """方法1: 价格分布法 - 找出成交量密集区"""
+    def _cost_distribution_score(self, df: pd.DataFrame) -> float:
+        """成本分布法 - 底部价格区间成交量占比"""
         try:
-            recent = df.tail(60).copy()
+            recent = df.tail(120).copy()
             current_price = recent['close'].iloc[-1]
 
-            # 计算价格区间
+            # 计算价格区间（20个更精细）
             min_price = recent['close'].min()
             max_price = recent['close'].max()
 
-            if max_price <= min_price:
+            if max_price <= min_price or max_price == 0:
                 return 0.5
 
-            # 将价格分成10个区间
+            # 底部1/3价格区间为"低成本区"
             price_range = max_price - min_price
-            bin_size = price_range / 10
+            low_threshold = min_price + price_range * 0.33
+            mid_threshold = min_price + price_range * 0.66
 
-            # 统计每个区间的成交量
-            volume_bins = {}
-            for _, row in recent.iterrows():
-                price = row['close']
-                vol = row['volume']
-                # 计算价格落在哪个区间
-                bin_idx = int((price - min_price) / bin_size) if bin_size > 0 else 5
-                bin_idx = min(9, max(0, bin_idx))
-                volume_bins[bin_idx] = volume_bins.get(bin_idx, 0) + vol
+            # 统计各区间成交量
+            low_vol = recent[recent['close'] <= low_threshold]['volume'].sum()
+            mid_vol = recent[(recent['close'] > low_threshold) & (recent['close'] <= mid_threshold)]['volume'].sum()
+            high_vol = recent[recent['close'] > mid_threshold]['volume'].sum()
 
-            if not volume_bins:
+            total_vol = low_vol + mid_vol + high_vol
+            if total_vol == 0:
                 return 0.5
 
-            # 找出成交量最大的区间
-            max_vol_bin = max(volume_bins, key=volume_bins.get)
-            max_vol = volume_bins[max_vol_bin]
+            # 底部成交量占比
+            low_ratio = low_vol / total_vol
 
-            # 计算当前价格落在哪个区间
-            current_bin = int((current_price - min_price) / bin_size) if bin_size > 0 else 5
-            current_bin = min(9, max(0, current_bin))
+            # 当前价格在低位还是高位
+            if current_price <= low_threshold:
+                position_bonus = 0.15  # 当前价格就在低成本区
+            elif current_price <= mid_threshold:
+                position_bonus = 0.05
+            else:
+                position_bonus = -0.05
 
-            # 当前价格在密集区 -> 筹码集中
-            # 距离密集区越远 -> 筹码越分散
-            distance = abs(current_bin - max_vol_bin)
+            # 底部占比超过50%说明大量筹码在低位
+            score = min(0.9, low_ratio * 1.3 + position_bonus)
+            return max(0.1, score)
 
-            if distance <= 1:
-                # 当前价格在成交量最大区间附近
-                return 0.7 + (max_vol_bin == current_bin) * 0.15
-            elif distance <= 2:
+        except:
+            return 0.5
+
+    def _time_weighted_price_distribution(self, df: pd.DataFrame) -> float:
+        """时间加权价格分布 - 近期权重更大"""
+        try:
+            # 分成4个30天窗口，每个窗口权重递增
+            windows = []
+            weights = [0.1, 0.2, 0.3, 0.4]  # 越近权重越大
+
+            for i in range(4):
+                start_idx = len(df) - 120 + i * 30
+                end_idx = start_idx + 30
+                if start_idx >= 0:
+                    window = df.iloc[start_idx:min(end_idx, len(df))].copy()
+                    if len(window) > 0:
+                        current = window['close'].iloc[-1]
+                        min_p = window['close'].min()
+                        max_p = window['close'].max()
+
+                        if max_p > min_p:
+                            # 当前价在区间的位置（0=最低，1=最高）
+                            position = (current - min_p) / (max_p - min_p)
+                            # 越接近底部分数越高
+                            score = 1 - position
+                            windows.append(score * weights[i])
+
+            if not windows:
+                return 0.5
+
+            return sum(windows) / sum(weights[:len(windows)])
+
+        except:
+            return 0.5
+
+    def _holder_number_score(self, stock_code: str) -> float:
+        """股东人数因子 - 股东减少=筹码集中"""
+        try:
+            holders_trend = self.get_holder_trend(stock_code)
+            if not holders_trend or len(holders_trend) < 2:
+                return 0.5  # 无数据时返回中性
+
+            # 比较最近两个季度的股东人数
+            latest_holders = holders_trend[0].get('holders', 0)
+            oldest_holders = holders_trend[-1].get('holders', 0)
+
+            if oldest_holders == 0:
+                return 0.5
+
+            change_pct = (latest_holders - oldest_holders) / oldest_holders
+
+            # 股东减少=筹码集中（加分）
+            # 股东增加=筹码分散（减分）
+            if change_pct < -0.2:  # 减少超过20%
+                return 0.85
+            elif change_pct < -0.1:  # 减少超过10%
+                return 0.70
+            elif change_pct < 0:  # 减少
+                return 0.55
+            elif change_pct < 0.1:  # 略增
+                return 0.45
+            elif change_pct < 0.2:  # 增加超过10%
+                return 0.30
+            else:  # 大幅增加
+                return 0.15
+
+        except:
+            return 0.5
+
+    def _cost_line_score(self, df: pd.DataFrame) -> float:
+        """移动成本线 - 20/80成本线分析"""
+        try:
+            recent = df.tail(120).copy()
+            current_price = recent['close'].iloc[-1]
+
+            # 按成交量加权计算成本线
+            total_vol = 0
+            weighted_price = 0
+            for _, row in recent.iterrows():
+                vol = row['volume']
+                price = row['close']
+                weighted_price += price * vol
+                total_vol += vol
+
+            if total_vol == 0:
+                return 0.5
+
+            avg_cost = weighted_price / total_vol
+
+            # 20%成本线：20%的成交量在哪个价格以下
+            # 80%成本线：80%的成交量在哪个价格以下
+            # 简化计算：用当前价与平均成本的比值
+
+            if current_price <= avg_cost * 0.9:
+                # 当前价低于平均成本10%以上，高度集中
+                return 0.85
+            elif current_price <= avg_cost:
+                # 当前价低于平均成本
+                return 0.70
+            elif current_price <= avg_cost * 1.1:
+                # 当前价略高于平均成本
+                return 0.50
+            elif current_price <= avg_cost * 1.3:
+                # 当前价高于平均成本10-30%
+                return 0.35
+            else:
+                # 当前价高于平均成本30%以上，高度分散
+                return 0.20
+
+        except:
+            return 0.5
                 return 0.5 + (1 - distance/2) * 0.2
             else:
                 return 0.3

@@ -69,7 +69,7 @@ class StockViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
 
-        guard let url = URL(string: "\(baseURL)/stocks?page_size=50") else {
+        guard let url = URL(string: "\(baseURL)/stocks?page_size=500") else {
             errorMessage = "URL错误"
             isLoading = false
             return

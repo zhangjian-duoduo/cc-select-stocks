@@ -88,7 +88,7 @@ def get_stocks():
                     row[json_field] = None
             # 处理数值字段 - 统一处理所有可能为字符串的数值字段
             for num_field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position']:
-                if row.get(num_field):
+                if row.get(num_field) is not None:
                     try:
                         val = row[num_field]
                         if isinstance(val, (int, float, Decimal)):
@@ -170,7 +170,7 @@ def refresh_stocks():
         analyzer = TechnicalAnalyzer(df)
 
         # 执行选股
-        selected_stocks = selector.select_stocks(limit=100)
+        selected_stocks = selector.select_stocks(limit=5000)
 
         if not selected_stocks:
             return jsonify({'code': 1, 'message': '选股失败'})

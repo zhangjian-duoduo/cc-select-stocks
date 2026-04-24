@@ -52,6 +52,43 @@ class DataFetcher:
             return None
 
     def get_stock_list_baostock(self) -> Optional[pd.DataFrame]:
+        # 优先从本地K线数据库获取股票列表和名称
+        try:
+            import pymysql
+            # 读取股票名称文件
+            stock_names = {}
+            name_file = os.path.join(os.path.dirname(__file__), '..', 'stock_codes.txt')
+            if os.path.exists(name_file):
+                with open(name_file, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split(' ', 1)
+                        if len(parts) == 2:
+                            stock_names[parts[0]] = parts[1]
+
+            conn = pymysql.connect(
+                host='localhost',
+                user='root',
+                password='',
+                database='select_stocks',
+                charset='utf8mb4'
+            )
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE (code LIKE '000%' OR code LIKE '001%' OR code LIKE '002%' OR code LIKE '300%' OR code LIKE '600%' OR code LIKE '601%' OR code LIKE '603%' OR code LIKE '605%' OR code LIKE '688%' OR code LIKE '003%')")
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            if rows:
+                # 添加股票名称
+                for row in rows:
+                    code = row['code']
+                    row['name'] = stock_names.get(code, code)
+                df = pd.DataFrame(rows)
+                print(f"[本地数据库] 获取到 {len(df)} 只股票")
+                return df
+        except Exception as e:
+            print(f"[本地数据库] 获取失败: {e}")
+
+        # 回退到baostock API
         try:
             import baostock as bs
             self._random_delay()
@@ -111,6 +148,34 @@ class DataFetcher:
             return f"sz.{code}"
 
     def get_stock_daily_baostock(self, stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        # 优先从本地数据库获取
+        try:
+            import pymysql
+            conn = pymysql.connect(
+                host='localhost',
+                user='root',
+                password='',
+                database='select_stocks',
+                charset='utf8mb4'
+            )
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("""
+                SELECT date, open, high, low, close, volume
+                FROM stock_kline
+                WHERE code = %s AND period = 'daily' AND date >= %s AND date <= %s
+                ORDER BY date
+            """, (stock_code, start_date, end_date))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            if rows:
+                df = pd.DataFrame(rows)
+                print(f"[本地数据库] 获取日K {stock_code}: {len(df)} 条")
+                return df
+        except Exception as e:
+            print(f"[本地数据库] 获取日K失败: {e}")
+
+        # 回退到baostock API
         try:
             import baostock as bs
             self._random_delay()
@@ -136,6 +201,34 @@ class DataFetcher:
             return None
 
     def get_stock_weekly(self, stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        # 优先从本地数据库获取
+        try:
+            import pymysql
+            conn = pymysql.connect(
+                host='localhost',
+                user='root',
+                password='',
+                database='select_stocks',
+                charset='utf8mb4'
+            )
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("""
+                SELECT date, open, high, low, close, volume
+                FROM stock_kline
+                WHERE code = %s AND period = 'weekly' AND date >= %s AND date <= %s
+                ORDER BY date
+            """, (stock_code, start_date, end_date))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            if rows:
+                df = pd.DataFrame(rows)
+                print(f"[本地数据库] 获取周K {stock_code}: {len(df)} 条")
+                return df
+        except Exception as e:
+            pass
+
+        # 回退到baostock API
         try:
             import baostock as bs
             self._random_delay()
@@ -160,6 +253,34 @@ class DataFetcher:
             return None
 
     def get_stock_monthly(self, stock_code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
+        # 优先从本地数据库获取
+        try:
+            import pymysql
+            conn = pymysql.connect(
+                host='localhost',
+                user='root',
+                password='',
+                database='select_stocks',
+                charset='utf8mb4'
+            )
+            cursor = conn.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("""
+                SELECT date, open, high, low, close, volume
+                FROM stock_kline
+                WHERE code = %s AND period = 'monthly' AND date >= %s AND date <= %s
+                ORDER BY date
+            """, (stock_code, start_date, end_date))
+            rows = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            if rows:
+                df = pd.DataFrame(rows)
+                print(f"[本地数据库] 获取月K {stock_code}: {len(df)} 条")
+                return df
+        except Exception as e:
+            pass
+
+        # 回退到baostock API
         try:
             import baostock as bs
             self._random_delay()
