@@ -365,6 +365,18 @@ struct SortMetricView: View {
 struct StockDetailView: View {
     let stock: Stock
     @State private var selectedQuarterIndex: Int? = nil
+    @State private var detailedStock: Stock?
+    @State private var isLoading = false
+    @State private var selectedKlinePeriod: KlinePeriod = .daily
+    @State private var selectedKlineIndex: Int? = nil
+
+    private let baseURL = "http://8.163.91.16:5000/api/v1"
+
+    enum KlinePeriod: String, CaseIterable {
+        case daily = "日"
+        case weekly = "周"
+        case monthly = "月"
+    }
 
     var body: some View {
         ScrollView {
@@ -436,12 +448,7 @@ struct StockDetailView: View {
                             }
                         }
                         .frame(height: 160)
-                        .chartXAxis {
-                            AxisMarks(position: .bottom) { _ in
-                                AxisValueLabel()
-                                    .foregroundStyle(Color.gray)
-                            }
-                        }
+                        .chartXAxis(.hidden)
                         .chartYAxis {
                             AxisMarks(position: .leading) { _ in
                                 AxisValueLabel()
@@ -450,23 +457,55 @@ struct StockDetailView: View {
                         }
                         .chartOverlay { proxy in
                             GeometryReader { geometry in
+                                let plotArea = geometry[proxy.plotAreaFrame]
                                 Rectangle()
                                     .fill(Color.clear)
                                     .contentShape(Rectangle())
                                     .gesture(
                                         DragGesture(minimumDistance: 0)
                                             .onChanged { value in
-                                                let xPosition = value.location.x
-                                                if let index: Int = proxy.value(atX: xPosition) {
-                                                    if index >= 0 && index < holders.count {
-                                                        selectedQuarterIndex = index
-                                                    }
+                                                let xPos = value.location.x
+                                                let cWidth = plotArea.width
+                                                let xOff = plotArea.origin.x
+                                                if holders.count > 0 {
+                                                    let idx = Int(((xPos - xOff) / cWidth) * CGFloat(holders.count))
+                                                    let clamped = max(0, min(idx, holders.count - 1))
+                                                    selectedQuarterIndex = clamped
                                                 }
                                             }
-                                            .onEnded { _ in
-                                                // 保持选中状态
-                                            }
+                                            .onEnded { _ in }
                                     )
+
+                                if let index = selectedQuarterIndex, index < holders.count {
+                                    let hValue = Double(holders[index].holders ?? 0)
+                                    let cWidth = plotArea.width
+                                    let xOff = plotArea.origin.x
+                                    let xPos = xOff + (CGFloat(index) + 0.5) / CGFloat(holders.count) * cWidth
+
+                                    // 垂直线
+                                    Path { path in
+                                        path.move(to: CGPoint(x: xPos, y: plotArea.origin.y))
+                                        path.addLine(to: CGPoint(x: xPos, y: plotArea.origin.y + plotArea.height))
+                                    }
+                                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                    .foregroundColor(Color.white.opacity(0.7))
+
+                                    // 简化水平线计算
+                                    let prices = holders.compactMap { Double($0.holders ?? 0) }
+                                    let minP = prices.min() ?? 0
+                                    let maxP = prices.max() ?? 1
+                                    if maxP > minP {
+                                        let ratio = (hValue - minP) / (maxP - minP)
+                                        let yPos = plotArea.origin.y + plotArea.height * (1 - ratio)
+
+                                        Path { path in
+                                            path.move(to: CGPoint(x: plotArea.origin.x, y: yPos))
+                                            path.addLine(to: CGPoint(x: plotArea.origin.x + plotArea.width, y: yPos))
+                                        }
+                                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                        .foregroundColor(Color(hex: "1E88E5").opacity(0.7))
+                                    }
+                                }
                             }
                         }
                         // 显示选中的季度信息
@@ -509,6 +548,210 @@ struct StockDetailView: View {
                                     .font(.title3)
                                     .fontWeight(.semibold)
                                     .foregroundColor(change >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                            }
+                        }
+                    }
+                    .padding()
+                    .background(Color(hex: "1E1E1E"))
+                    .cornerRadius(12)
+                }
+
+                // K线趋势图
+                if isLoading {
+                    VStack {
+                        ProgressView()
+                            .frame(height: 200)
+                        Text("加载中...")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    .padding()
+                    .background(Color(hex: "1E1E1E"))
+                    .cornerRadius(12)
+                } else if let kline = klineDataForSelectedPeriod, !kline.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("股价趋势（\(selectedKlinePeriod.rawValue)线）")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Spacer()
+                        }
+
+                        // 周期选择器
+                        HStack(spacing: 12) {
+                            ForEach(KlinePeriod.allCases, id: \.self) { period in
+                                Button {
+                                    selectedKlinePeriod = period
+                                    selectedKlineIndex = nil
+                                } label: {
+                                    Text(period.rawValue)
+                                        .font(.subheadline)
+                                        .fontWeight(selectedKlinePeriod == period ? .semibold : .regular)
+                                        .padding(.horizontal, 16)
+                                        .padding(.vertical, 6)
+                                        .background(selectedKlinePeriod == period ? Color(hex: "1E88E5") : Color(hex: "2C2C2C"))
+                                        .foregroundColor(selectedKlinePeriod == period ? .white : .gray)
+                                        .cornerRadius(16)
+                                }
+                            }
+                        }
+
+                        Chart {
+                            ForEach(kline.indices, id: \.self) { index in
+                                LineMark(
+                                    x: .value("日期", index),
+                                    y: .value("收盘价", kline[index].close ?? 0)
+                                )
+                                .foregroundStyle(Color(hex: "FFC107"))
+
+                                // 显示选中点的光标
+                                if let selectedIdx = selectedKlineIndex, selectedIdx == index {
+                                    PointMark(
+                                        x: .value("日期", index),
+                                        y: .value("收盘价", kline[index].close ?? 0)
+                                    )
+                                    .foregroundStyle(Color.white)
+                                    .symbolSize(80)
+                                }
+                            }
+                        }
+                        .chartXAxis(.hidden)
+                        .chartYAxis {
+                            AxisMarks(position: .trailing) { _ in
+                                AxisValueLabel()
+                                    .foregroundStyle(Color.gray)
+                            }
+                        }
+                        .chartOverlay { proxy in
+                            GeometryReader { geometry in
+                                let plotArea = geometry[proxy.plotAreaFrame]
+
+                                Rectangle()
+                                    .fill(Color.clear)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                let xPos = value.location.x
+                                                let cWidth = plotArea.width
+                                                let xOff = plotArea.origin.x
+                                                if kline.count > 0 {
+                                                    let idx = Int(((xPos - xOff) / cWidth) * CGFloat(kline.count))
+                                                    let clamped = max(0, min(idx, kline.count - 1))
+                                                    selectedKlineIndex = clamped
+                                                }
+                                            }
+                                            .onEnded { _ in }
+                                    )
+
+                                if let index = selectedKlineIndex, index < kline.count {
+                                    let price = Double(kline[index].close ?? 0)
+                                    let cWidth = plotArea.width
+                                    let xOff = plotArea.origin.x
+                                    let xPos = xOff + (CGFloat(index) + 0.5) / CGFloat(kline.count) * cWidth
+
+                                    // 垂直线
+                                    Path { path in
+                                        path.move(to: CGPoint(x: xPos, y: plotArea.origin.y))
+                                        path.addLine(to: CGPoint(x: xPos, y: plotArea.origin.y + plotArea.height))
+                                    }
+                                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                    .foregroundColor(Color.white.opacity(0.7))
+
+                                    // 简化水平线计算
+                                    let prices = kline.compactMap { Double($0.close ?? 0) }
+                                    let minP = prices.min() ?? 0
+                                    let maxP = prices.max() ?? 1
+                                    if maxP > minP {
+                                        let ratio = (price - minP) / (maxP - minP)
+                                        let yPos = plotArea.origin.y + plotArea.height * (1 - ratio)
+
+                                        Path { path in
+                                            path.move(to: CGPoint(x: plotArea.origin.x, y: yPos))
+                                            path.addLine(to: CGPoint(x: plotArea.origin.x + plotArea.width, y: yPos))
+                                        }
+                                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                        .foregroundColor(Color(hex: "FFC107").opacity(0.7))
+                                    }
+                                }
+                            }
+                        }
+
+                        // 光标信息显示
+                        if let index = selectedKlineIndex, index < kline.count {
+                            let data = kline[index]
+                            HStack {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(data.date ?? "")
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                    HStack(spacing: 12) {
+                                        VStack(alignment: .leading) {
+                                            Text("开")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            Text(String(format: "%.2f", data.open ?? 0))
+                                                .font(.caption)
+                                                .foregroundColor(.white)
+                                        }
+                                        VStack(alignment: .leading) {
+                                            Text("高")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            Text(String(format: "%.2f", data.high ?? 0))
+                                                .font(.caption)
+                                                .foregroundColor(Color(hex: "F44336"))
+                                        }
+                                        VStack(alignment: .leading) {
+                                            Text("低")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            Text(String(format: "%.2f", data.low ?? 0))
+                                                .font(.caption)
+                                                .foregroundColor(Color(hex: "4CAF50"))
+                                        }
+                                        VStack(alignment: .leading) {
+                                            Text("收")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            Text(String(format: "%.2f", data.close ?? 0))
+                                                .font(.caption)
+                                                .fontWeight(.semibold)
+                                                .foregroundColor(.white)
+                                        }
+                                        VStack(alignment: .leading) {
+                                            Text("量")
+                                                .font(.system(size: 10))
+                                                .foregroundColor(.gray)
+                                            Text(formatVolume(data.volume ?? 0))
+                                                .font(.caption)
+                                                .foregroundColor(Color(hex: "FFC107"))
+                                        }
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color(hex: "2C2C2C"))
+                            .cornerRadius(8)
+                        } else {
+                            // 默认显示最新数据
+                            HStack {
+                                Text("最新: ")
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                                Text(String(format: "¥%.2f", kline.last?.close ?? 0))
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                                Spacer()
+                                if kline.count >= 2 {
+                                    let change = ((kline.last?.close ?? 0) - (kline.first?.close ?? 0)) / (kline.first?.close ?? 1) * 100
+                                    Text("累计: \(String(format: "%.1f%%", change))")
+                                        .font(.caption)
+                                        .foregroundColor(change >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                                }
                             }
                         }
                     }
@@ -708,6 +951,46 @@ struct StockDetailView: View {
         .background(Color(hex: "121212"))
         .navigationTitle(stock.name)
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            loadStockDetail()
+        }
+    }
+
+    // 根据选择的周期返回对应的K线数据
+    private var klineDataForSelectedPeriod: [Stock.KlineData]? {
+        guard let stock = detailedStock else { return nil }
+        switch selectedKlinePeriod {
+        case .daily:
+            return stock.kline_daily
+        case .weekly:
+            return stock.kline_weekly
+        case .monthly:
+            return stock.kline_monthly
+        }
+    }
+
+    // 加载股票详情（使用手动解析）
+    @MainActor
+    private func loadStockDetail() {
+        guard let url = URL(string: "\(baseURL)/stock/\(stock.code)") else { return }
+
+        isLoading = true
+        Task {
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    // 使用StockAPI手动解析详情页响应
+                    let stock = StockAPI.parseDetailResponse(data)
+                    if stock != nil {
+                        print("加载详情成功: 日K=\(stock?.kline_daily?.count ?? 0), 周K=\(stock?.kline_weekly?.count ?? 0), 月K=\(stock?.kline_monthly?.count ?? 0)")
+                    }
+                    detailedStock = stock
+                }
+            } catch {
+                print("加载详情失败: \(error)")
+            }
+            isLoading = false
+        }
     }
 
     // 估值颜色
@@ -766,6 +1049,17 @@ struct StockDetailView: View {
         else if value > 60 { return "筹码集中，上涨概率大" }
         else if value > 40 { return "筹码分布均衡" }
         else { return "筹码分散，上涨动力不足" }
+    }
+
+    // 格式化成交量
+    func formatVolume(_ volume: Double) -> String {
+        if volume >= 100000000 {
+            return String(format: "%.2f亿", volume / 100000000)
+        } else if volume >= 10000 {
+            return String(format: "%.2f万", volume / 10000)
+        } else {
+            return String(format: "%.0f", volume)
+        }
     }
 }
 
