@@ -364,6 +364,7 @@ struct SortMetricView: View {
 
 struct StockDetailView: View {
     let stock: Stock
+    @State private var selectedQuarterIndex: Int? = nil
 
     var body: some View {
         ScrollView {
@@ -435,10 +436,54 @@ struct StockDetailView: View {
                             }
                         }
                         .frame(height: 160)
+                        .chartOverlay { proxy in
+                            GeometryReader { geometry in
+                                Rectangle()
+                                    .fill(Color.clear)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                let xPosition = value.location.x
+                                                if let index: Int = proxy.value(atX: xPosition) {
+                                                    if index >= 0 && index < holders.count {
+                                                        selectedQuarterIndex = index
+                                                    }
+                                                }
+                                            }
+                                            .onEnded { _ in
+                                                // 保持选中状态
+                                            }
+                                    )
+                            }
+                        }
+                        // 显示选中的季度信息
+                        if let index = selectedQuarterIndex, index < holders.count {
+                            HStack {
+                                Text(holders[index].date ?? "")
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                Text(": \(holders[index].holders ?? 0)户")
+                                    .font(.caption)
+                                    .fontWeight(.bold)
+                                    .foregroundColor(Color(hex: "1E88E5"))
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color(hex: "1E1E1E"))
+                            .cornerRadius(8)
+                        }
                         .chartXAxis {
-                            AxisMarks(values: .automatic) { _ in
-                                AxisValueLabel()
-                                    .foregroundStyle(Color.gray)
+                            AxisMarks(values: holders.indices) { index in
+                                if let i = index.as(Int.self), i % max(1, holders.count / 6) == 0 {
+                                    AxisValueLabel {
+                                        if i < holders.count {
+                                            Text(holders[i].date ?? "")
+                                                .font(.caption2)
+                                                .foregroundStyle(Color.gray)
+                                        }
+                                    }
+                                }
                             }
                         }
                         .chartYAxis {
