@@ -121,7 +121,7 @@ struct StockCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // 第一行：名字代码 + 价格 + 收藏
+            // 第一行：名字代码 + 价格 + 当日涨跌 + 收藏
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(stock.name)
@@ -134,9 +134,20 @@ struct StockCard: View {
 
                 Spacer()
 
-                Text(String(format: "¥%.2f", stock.price ?? 0))
-                    .font(.headline)
-                    .foregroundColor(.white)
+                // 价格 + 当日涨跌
+                let changePct = stock.change_pct ?? 0
+                HStack(spacing: 4) {
+                    Text(String(format: "¥%.2f", stock.price ?? 0))
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    HStack(spacing: 2) {
+                        Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
+                            .font(.system(size: 9))
+                        Text(String(format: "%.1f%%", changePct))
+                            .font(.system(size: 11))
+                    }
+                    .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                }
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -150,50 +161,67 @@ struct StockCard: View {
                 .buttonStyle(PlainButtonStyle())
             }
 
-            // 第二行：指标 + 当日涨跌 + 背离
-            HStack(spacing: 8) {
+            // 第二行：指标们
+            HStack(spacing: 4) {
                 // 5年涨跌
-                let change5y = stock.change_5y ?? 0
-                Text(String(format: "%.0f%%", change5y))
-                    .font(.system(size: 11))
-                    .foregroundColor(change5y >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                VStack(spacing: 0) {
+                    Text(String(format: "%.0f%%", stock.change_5y ?? 0))
+                        .font(.system(size: 11))
+                        .foregroundColor((stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                    Text("5年")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
 
                 // 位置
-                Text(stock.price_position.map { "\(Int($0 * 100))" } ?? "-")
-                    .font(.system(size: 11))
-                    .foregroundColor(colorForPosition(stock.price_position))
+                VStack(spacing: 0) {
+                    Text(stock.price_position.map { "\(Int($0 * 100))" } ?? "-")
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForPosition(stock.price_position))
+                    Text("位置")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
 
                 // 评分
-                Text(calculateScore())
-                    .font(.system(size: 11))
-                    .foregroundColor(colorForScore(calculateScore()))
+                VStack(spacing: 0) {
+                    Text(calculateScore())
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForScore(calculateScore()))
+                    Text("评分")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
 
                 // 筹码
-                Text(stock.chip_concentration.map { String(format: "%.0f", $0 * 100) } ?? "-")
-                    .font(.system(size: 11))
-                    .foregroundColor(colorForChip(stock.chip_concentration))
+                VStack(spacing: 0) {
+                    Text(stock.chip_concentration.map { String(format: "%.0f", $0 * 100) } ?? "-")
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForChip(stock.chip_concentration))
+                    Text("筹码")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
 
                 // 股东
-                Text(shareholderTrendValue())
-                    .font(.system(size: 11))
-                    .foregroundColor(colorForShareholder(shareholderTrendValue()))
-
-                Spacer()
-
-                // 当日涨跌
-                let changePct = stock.change_pct ?? 0
-                HStack(spacing: 2) {
-                    Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
-                        .font(.system(size: 9))
-                    Text(String(format: "%.1f%%", changePct))
+                VStack(spacing: 0) {
+                    Text(shareholderTrendValue())
                         .font(.system(size: 11))
+                        .foregroundColor(colorForShareholder(shareholderTrendValue()))
+                    Text("股东")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
                 }
-                .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
 
-                // 背离（只显示点）
-                Text(divergenceDots())
-                    .font(.system(size: 11))
-                    .foregroundColor(colorForDivergence())
+                // 背离
+                VStack(spacing: 0) {
+                    Text(divergenceDots())
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForDivergence())
+                    Text("背")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
             }
         }
         .padding(.vertical, 6)
