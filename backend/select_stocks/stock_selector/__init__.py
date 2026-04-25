@@ -201,15 +201,15 @@ class StockSelector:
         if self.is_st_stock(stock_name):
             return None
 
+        # 条件2: 过滤指数/主题基金（没有K线数据的）
+        # 检查该股票是否有月K数据（至少60条）
         end_date = datetime.now().strftime('%Y%m%d')
-        start_date = (datetime.now() - timedelta(days=365*5)).strftime('%Y%m%d')  # 5年数据
-
-        # 获取月K数据（至少60条）
+        start_date = (datetime.now() - timedelta(days=365*5)).strftime('%Y%m%d')
         monthly_df = self.df.fetch_with_fallback('get_stock_monthly', stock_code, start_date, end_date)
         if monthly_df is None or len(monthly_df) < 60:
             return None
 
-        # 条件2: 月K底部震荡（最近24个月振幅 < 300%）
+        # 条件3: 月K底部震荡（最近24个月振幅 < 300%）
         if not self.check_bottom_consolidation(monthly_df):
             return None
 
