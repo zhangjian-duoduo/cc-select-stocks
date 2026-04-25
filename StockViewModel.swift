@@ -7,9 +7,9 @@ enum SortOption: String, CaseIterable {
     case score = "评分"
     case chip = "筹码"
     case shareholder = "股东"
-    case bottomDivergence = "底背离"
-    case dailyChange = "当日涨跌"
+    case dailyChange = "涨跌"
     case change5Y = "5年涨跌"
+    case bottomDivergence = "底背离"
 }
 
 class StockViewModel: ObservableObject {

@@ -120,7 +120,7 @@ struct StockCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             // 第一行：名字代码 + 价格 + 当日涨跌 + 收藏
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
@@ -134,20 +134,17 @@ struct StockCard: View {
 
                 Spacer()
 
-                // 价格 + 当日涨跌
+                // 价格 + 当日涨跌（加大间距和字体）
                 let changePct = stock.change_pct ?? 0
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Text(String(format: "¥%.2f", stock.price ?? 0))
                         .font(.headline)
                         .foregroundColor(.white)
-                    HStack(spacing: 2) {
-                        Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
-                            .font(.system(size: 9))
-                        Text(String(format: "%.1f%%", changePct))
-                            .font(.system(size: 11))
-                    }
-                    .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                    Text(String(format: "%@%.1f%%", changePct >= 0 ? "+" : "", changePct))
+                        .font(.subheadline)
+                        .fontWeight(.medium)
                 }
+                .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
 
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -224,7 +221,7 @@ struct StockCard: View {
                 }
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
     }
 
     func divergenceDots() -> String {
@@ -509,7 +506,7 @@ struct StockDetailView: View {
                                     .foregroundColor(Color(hex: "1E88E5"))
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
+                            .padding(.vertical, 4)
                             .background(Color(hex: "1E1E1E"))
                             .cornerRadius(8)
                         }
@@ -577,7 +574,7 @@ struct StockDetailView: View {
                                         .font(.subheadline)
                                         .fontWeight(selectedKlinePeriod == period ? .semibold : .regular)
                                         .padding(.horizontal, 16)
-                                        .padding(.vertical, 6)
+                                        .padding(.vertical, 4)
                                         .background(selectedKlinePeriod == period ? Color(hex: "1E88E5") : Color(hex: "2C2C2C"))
                                         .foregroundColor(selectedKlinePeriod == period ? .white : .gray)
                                         .cornerRadius(16)
