@@ -121,12 +121,12 @@ struct StockCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            // 第一行：名字代码 + 价格 + 收藏
             HStack {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(stock.name)
                         .font(.headline)
                         .foregroundColor(.white)
-
                     Text(stock.code)
                         .font(.caption)
                         .foregroundColor(.gray)
@@ -134,7 +134,10 @@ struct StockCard: View {
 
                 Spacer()
 
-                // 收藏按钮
+                Text(String(format: "¥%.2f", stock.price ?? 0))
+                    .font(.headline)
+                    .foregroundColor(.white)
+
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         stockViewModel.toggleFavorite(stock)
@@ -143,182 +146,75 @@ struct StockCard: View {
                     Image(systemName: stockViewModel.isFavorited(stock.code) ? "star.fill" : "star")
                         .foregroundColor(stockViewModel.isFavorited(stock.code) ? Color(hex: "FFC107") : .gray)
                         .font(.title3)
-                        .scaleEffect(stockViewModel.isFavorited(stock.code) ? 1.2 : 1.0)
                 }
                 .buttonStyle(PlainButtonStyle())
-                .animation(.easeInOut(duration: 0.2), value: stockViewModel.isFavorited(stock.code))
             }
 
-            HStack {
-                Text(String(format: "¥%.2f", stock.price ?? 0))
-                    .font(.title3)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.white)
+            // 第二行：指标 + 当日涨跌 + 背离
+            HStack(spacing: 8) {
+                // 5年涨跌
+                let change5y = stock.change_5y ?? 0
+                Text(String(format: "%.0f%%", change5y))
+                    .font(.system(size: 11))
+                    .foregroundColor(change5y >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+
+                // 位置
+                Text(stock.price_position.map { "\(Int($0 * 100))" } ?? "-")
+                    .font(.system(size: 11))
+                    .foregroundColor(colorForPosition(stock.price_position))
+
+                // 评分
+                Text(calculateScore())
+                    .font(.system(size: 11))
+                    .foregroundColor(colorForScore(calculateScore()))
+
+                // 筹码
+                Text(stock.chip_concentration.map { String(format: "%.0f", $0 * 100) } ?? "-")
+                    .font(.system(size: 11))
+                    .foregroundColor(colorForChip(stock.chip_concentration))
+
+                // 股东
+                Text(shareholderTrendValue())
+                    .font(.system(size: 11))
+                    .foregroundColor(colorForShareholder(shareholderTrendValue()))
 
                 Spacer()
 
-                // 当日涨跌幅
+                // 当日涨跌
                 let changePct = stock.change_pct ?? 0
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     Image(systemName: changePct >= 0 ? "arrow.up.right" : "arrow.down.right")
-                    Text(String(format: "%.2f%%", changePct))
+                        .font(.system(size: 9))
+                    Text(String(format: "%.1f%%", changePct))
+                        .font(.system(size: 11))
                 }
                 .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+
+                // 背离（只显示点）
+                Text(divergenceDots())
+                    .font(.system(size: 11))
+                    .foregroundColor(colorForDivergence())
             }
-
-            // 排序指标显示
-            sortIndicatorView
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
     }
 
-    @ViewBuilder
-    var sortIndicatorView: some View {
-        HStack(spacing: 6) {
-            // 5年涨跌指标
-            SortMetricView(
-                title: "5年",
-                value: String(format: "%.1f%%", stock.change_5y ?? 0),
-                isHighlighted: sortOption == .change5Y,
-                color: (stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")
-            )
-
-            // 位置指标
-            SortMetricView(
-                title: "位置",
-                value: stock.price_position.map { "\(Int($0 * 100))" } ?? "-",
-                isHighlighted: sortOption == .position,
-                color: colorForPosition(stock.price_position)
-            )
-
-            // 评分指标
-            SortMetricView(
-                title: "评分",
-                value: calculateScore(),
-                isHighlighted: sortOption == .score,
-                color: colorForScore(calculateScore())
-            )
-
-            // 筹码指标
-            SortMetricView(
-                title: "筹码",
-                value: stock.chip_concentration.map { String(format: "%.0f", $0 * 100) } ?? "-",
-                isHighlighted: sortOption == .chip,
-                color: colorForChip(stock.chip_concentration)
-            )
-
-            // 股东指标
-            SortMetricView(
-                title: "股东",
-                value: shareholderTrendValue(),
-                isHighlighted: sortOption == .shareholder,
-                color: colorForShareholder(shareholderTrendValue())
-            )
-
-            // 底背离指标 - 用圆点数量表示背离级别
-            SortMetricView(
-                title: "背",
-                value: divergenceDisplayText(),
-                isHighlighted: sortOption == .bottomDivergence,
-                color: colorForDivergence()
-            )
-        }
-        .padding(.horizontal, 4)
-    }
-
-    func calculateScore() -> String {
-        // 与StockViewModel保持一致的评分算法
-        // 1. 趋势得分 (30%)
-        let trendScore = trendScoreValue()
-
-        // 2. 估值得分 (25%)
-        let pricePct = stock.price_percentile ?? 50
-        let valuationScore = (100 - pricePct) / 100.0
-
-        // 3. 筹码得分 (20%)
-        let chipScore = (stock.chip_concentration ?? 50) / 100.0
-
-        // 4. 股东变化得分 (15%)
-        let holderPct = shareholderChangePercent()
-        let holderScore: Double
-        if holderPct < -10 {
-            holderScore = 1.0
-        } else if holderPct < 0 {
-            holderScore = 0.7
-        } else if holderPct < 20 {
-            holderScore = 0.4
-        } else {
-            holderScore = 0.1
-        }
-
-        // 5. 背离得分 (10%)
-        var divergenceScore: Double = 0
-        if stock.macd_divergence?.monthly == true { divergenceScore += 0.5 }
-        if stock.macd_divergence?.weekly == true { divergenceScore += 0.3 }
-        if stock.macd_divergence?.daily == true { divergenceScore += 0.2 }
-
-        let total = trendScore * 0.30 + valuationScore * 0.25 + chipScore * 0.20 + holderScore * 0.15 + divergenceScore * 0.10
-        return String(format: "%.0f", min(1.0, max(0.0, total)) * 100)
-    }
-
-    func trendScoreValue() -> Double {
-        guard let t = stock.trend_analysis else { return 0.5 }
-        switch t.short {
-        case "上涨趋势": return 1.0
-        case "震荡": return 0.6
-        case "下跌趋势": return 0.2
-        default: return 0.5
-        }
-    }
-
-    func shareholderChangePercent() -> Double {
-        guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-        // 过滤异常数据（股东数<1000可能是上市初期数据）
-        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
-        guard validTrend.count >= 2 else { return 0 }
-        let oldest = validTrend.first?.holders ?? 0
-        let newest = validTrend.last?.holders ?? 0
-        if oldest > 0 {
-            return Double(newest - oldest) / Double(oldest) * 100
-        }
-        return 0
-    }
-
-    func shareholderTrendValue() -> String {
-        // 显示5年来股东人数变化百分比
-        guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
-        // 过滤异常数据（股东数<1000可能是上市初期数据）
-        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
-        guard validTrend.count >= 2 else { return "-" }
-        let oldest = validTrend.first?.holders ?? 0
-        let newest = validTrend.last?.holders ?? 0
-        guard oldest > 0 else { return "-" }
-        let pct = Double(newest - oldest) / Double(oldest) * 100
-        if pct > 0 {
-            return "+\(String(format: "%.1f", pct))%"
-        } else {
-            return "\(String(format: "%.1f", pct))%"
-        }
-    }
-
-    // 获取背离级别显示文本
-    func divergenceDisplayText() -> String {
-        guard let div = stock.macd_divergence else { return "-" }
+    func divergenceDots() -> String {
+        guard let div = stock.macd_divergence else { return "" }
         var count = 0
         if div.monthly == true { count += 1 }
         if div.weekly == true { count += 1 }
         if div.daily == true { count += 1 }
-        if count == 0 { return "-" }
+        if count == 0 { return "" }
         return String(repeating: "●", count: count)
     }
 
-    // 背离颜色
     func colorForDivergence() -> Color {
-        guard let div = stock.macd_divergence else { return .gray }
-        if div.monthly == true { return Color(hex: "4CAF50") }  // 月背离最强
+        guard let div = stock.macd_divergence else { return .clear }
+        if div.monthly == true { return Color(hex: "4CAF50") }
         else if div.weekly == true { return Color(hex: "1E88E5") }
         else if div.daily == true { return Color(hex: "FFC107") }
-        else { return .gray }
+        else { return .clear }
     }
 
     func colorForPosition(_ position: Double?) -> Color {
@@ -343,10 +239,61 @@ struct StockCard: View {
     }
 
     func colorForShareholder(_ value: String) -> Color {
-        if value == "-" { return .gray }
-        if value.hasPrefix("+") { return Color(hex: "F44336") } // 股东增加 = 分散
-        if let num = Double(value.replacingOccurrences(of: "%", with: "")), num < -10 { return Color(hex: "4CAF50") } // 大幅减少 = 集中
+        if value.isEmpty || value == "-" { return .gray }
+        if value.hasPrefix("+") { return Color(hex: "F44336") }
+        if let num = Double(value.replacingOccurrences(of: "%", with: "")), num < -10 { return Color(hex: "4CAF50") }
         return Color(hex: "FFC107")
+    }
+
+    func calculateScore() -> String {
+        let trendScore = trendScoreValue()
+        let pricePct = stock.price_percentile ?? 50
+        let valuationScore = (100 - pricePct) / 100.0
+        let chipScore = (stock.chip_concentration ?? 50) / 100.0
+        let holderPct = shareholderChangePercent()
+        let holderScore: Double
+        if holderPct < -10 { holderScore = 1.0 }
+        else if holderPct < 0 { holderScore = 0.7 }
+        else if holderPct < 20 { holderScore = 0.4 }
+        else { holderScore = 0.1 }
+        var divergenceScore: Double = 0
+        if stock.macd_divergence?.monthly == true { divergenceScore += 0.5 }
+        if stock.macd_divergence?.weekly == true { divergenceScore += 0.3 }
+        if stock.macd_divergence?.daily == true { divergenceScore += 0.2 }
+        let total = trendScore * 0.30 + valuationScore * 0.25 + chipScore * 0.20 + holderScore * 0.15 + divergenceScore * 0.10
+        return String(format: "%.0f", min(1.0, max(0.0, total)) * 100)
+    }
+
+    func trendScoreValue() -> Double {
+        guard let t = stock.trend_analysis else { return 0.5 }
+        switch t.short {
+        case "上涨趋势": return 1.0
+        case "震荡": return 0.6
+        case "下跌趋势": return 0.2
+        default: return 0.5
+        }
+    }
+
+    func shareholderChangePercent() -> Double {
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
+        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
+        guard validTrend.count >= 2 else { return 0 }
+        let oldest = validTrend.first?.holders ?? 0
+        let newest = validTrend.last?.holders ?? 0
+        if oldest > 0 { return Double(newest - oldest) / Double(oldest) * 100 }
+        return 0
+    }
+
+    func shareholderTrendValue() -> String {
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
+        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
+        guard validTrend.count >= 2 else { return "-" }
+        let oldest = validTrend.first?.holders ?? 0
+        let newest = validTrend.last?.holders ?? 0
+        guard oldest > 0 else { return "-" }
+        let pct = Double(newest - oldest) / Double(oldest) * 100
+        if pct > 0 { return "+\(String(format: "%.0f", pct))%" }
+        else { return "\(String(format: "%.0f", pct))%" }
     }
 }
 
