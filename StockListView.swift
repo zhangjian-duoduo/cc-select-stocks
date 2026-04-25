@@ -3,6 +3,8 @@ import Charts
 
 struct StockListView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
+    @State private var selectedStockIndex: Int = 0
+    @State private var showDetailPage = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,8 +39,11 @@ struct StockListView: View {
 
                 // 股票列表
                 List {
-                    ForEach(stockViewModel.filteredStocks) { stock in
-                        NavigationLink(destination: StockDetailView(stock: stock)) {
+                    ForEach(Array(stockViewModel.filteredStocks.enumerated()), id: \.element.code) { index, stock in
+                        Button {
+                            selectedStockIndex = index
+                            showDetailPage = true
+                        } label: {
                             StockCard(stock: stock, sortOption: stockViewModel.sortOption)
                         }
                         .buttonStyle(PlainButtonStyle())
@@ -64,6 +69,15 @@ struct StockListView: View {
         }
         .refreshable {
             await stockViewModel.refresh()
+        }
+        .navigationDestination(isPresented: $showDetailPage) {
+            if selectedStockIndex < stockViewModel.filteredStocks.count {
+                StockDetailPageView(
+                    currentIndex: selectedStockIndex,
+                    allStocks: stockViewModel.filteredStocks,
+                    currentPage: $selectedStockIndex
+                )
+            }
         }
     }
 }
