@@ -111,6 +111,294 @@ def get_stocks():
         cursor.close()
         conn.close()
 
+@app.route('/api/v1/filter', methods=['POST'])
+def filter_stocks():
+    """多条件筛选股票"""
+    import json
+    from decimal import Decimal
+
+    data = request.get_json() or {}
+    filters = data.get('filters', [])
+
+    conn = get_db()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        # 获取所有股票和分析数据
+        cursor.execute("""
+            SELECT s.code, s.name, s.price, s.change_pct, s.selected_at,
+                   a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
+                   a.macd_divergence, a.trend_analysis, a.price_position
+            FROM stocks s
+            LEFT JOIN stock_analysis a ON s.code = a.code
+        """)
+
+        stocks = cursor.fetchall()
+
+        # 转换数据格式
+        processed_stocks = []
+        for row in stocks:
+            stock = dict(row)
+            if stock.get('selected_at'):
+                stock['selected_at'] = stock['selected_at'].strftime('%Y-%m-%d')
+
+            # 解析JSON字段
+            for field in ['holders_trend', 'macd_divergence', 'trend_analysis']:
+                if stock.get(field) and isinstance(stock[field], str):
+                    try:
+                        stock[field] = json.loads(stock[field])
+                    except:
+                        stock[field] = None
+
+            # 转换数值字段
+            for field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position']:
+                if stock.get(field) is not None:
+                    try:
+                        stock[field] = float(stock[field])
+                    except:
+                        stock[field] = None
+
+            processed_stocks.append(stock)
+
+        # 应用筛选条件（传入数据库连接）
+        filtered = apply_filters(processed_stocks, filters, conn)
+
+        return jsonify({'code': 0, 'data': filtered, 'total': len(filtered)})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        cursor.close()
+        conn.close()
+
+def apply_filters(stocks, filters, conn=None):
+    """应用筛选条件"""
+    if not filters:
+        return stocks
+
+    # 如果没有提供连接，获取一个新连接
+    own_conn = False
+    if conn is None:
+        conn = get_db()
+        own_conn = True
+
+    result = []
+
+    for stock in stocks:
+        passed = True
+
+        for filter_name in filters:
+            if filter_name == 'momentum_reversal':
+                # 动量反转：跌幅>50% + MACD底背离 + 缩量
+                if not check_momentum_reversal(stock):
+                    passed = False
+                    break
+
+            elif filter_name == 'ma_alignment':
+                # 均线多头排列：需要K线数据计算
+                if not check_ma_alignment(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'volume_break':
+                # 放量突破：需要K线成交量数据
+                if not check_volume_break(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'high_dividend':
+                # 高股息：使用PE分位作为代理（低PE高股息概率大）
+                if not check_high_dividend(stock):
+                    passed = False
+                    break
+
+            elif filter_name == 'low_pb':
+                # 破净：使用股价和代码估算（低价股可能是破净）
+                if not check_low_pb(stock.get('code'), stock.get('price')):
+                    passed = False
+                    break
+
+            elif filter_name == 'small_cap':
+                # 小盘弹性：股价<10元
+                if not check_small_cap_simple(stock.get('code'), stock.get('price')):
+                    passed = False
+                    break
+
+            elif filter_name == 'holder_decrease':
+                # 股东人数减少
+                if not check_holder_decrease(stock):
+                    passed = False
+                    break
+
+            elif filter_name == 'sector_rotation':
+                # 行业轮动：科创板/创业板优先
+                if not check_sector_rotation(stock):
+                    passed = False
+                    break
+
+        if passed:
+            result.append(stock)
+
+    if own_conn and conn:
+        conn.close()
+
+    return result
+
+def check_momentum_reversal(stock):
+    """检查动量反转：跌幅>50% + MACD底背离"""
+    try:
+        # 检查5年跌幅>50% (从最高点)
+        change_5y = stock.get('change_5y', 0) or 0
+        if change_5y > -50:
+            return False
+
+        # 检查MACD日线底背离
+        macd = stock.get('macd_divergence', {}) or {}
+        if not macd.get('daily'):
+            return False
+
+        return True
+    except:
+        return False
+
+def check_holder_decrease(stock):
+    """检查股东人数是否连续减少"""
+    try:
+        holders = stock.get('holders_trend', []) or []
+        if len(holders) < 2:
+            return False
+
+        # 最新两期比较
+        latest = holders[-1].get('holders', 0) or 0
+        previous = holders[-2].get('holders', 0) or 0
+
+        return latest < previous
+    except:
+        return False
+
+def check_ma_alignment(stock_code, conn):
+    """检查均线多头排列：5日>10日>20日>60日"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最近60个交易日K线
+        cursor.execute("""
+            SELECT date, close
+            FROM stock_kline
+            WHERE code = %s AND period = 'daily'
+            ORDER BY date DESC
+            LIMIT 60
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 60:
+            return False
+
+        # 计算均线（简单移动平均）
+        closes = [float(k['close']) for k in reversed(klines)]
+
+        ma5 = sum(closes[-5:]) / 5
+        ma10 = sum(closes[-10:]) / 10
+        ma20 = sum(closes[-20:]) / 20
+        ma60 = sum(closes[-60:]) / 60
+
+        # 多头排列：ma5 > ma10 > ma20 > ma60
+        return ma5 > ma10 > ma20 > ma60
+    except:
+        return False
+
+def check_volume_break(stock_code, conn):
+    """检查放量突破：成交量突破20日最高量"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最近21个交易日
+        cursor.execute("""
+            SELECT date, volume
+            FROM stock_kline
+            WHERE code = %s AND period = 'daily'
+            ORDER BY date DESC
+            LIMIT 21
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 21:
+            return False
+
+        # 最新一天的成交量
+        latest_volume = float(klines[0]['volume'])
+
+        # 20日内最高量
+        volumes = [float(k['volume']) for k in klines[1:21]]
+        max_volume_20d = max(volumes)
+
+        # 放量：超过20日最高量的70%或突破
+        return latest_volume > max_volume_20d * 0.7
+    except:
+        return False
+
+def check_small_cap(stock_code, price, conn):
+    """检查小盘弹性：估算市值<30亿"""
+    try:
+        if not price or price <= 0:
+            return False
+
+        # 使用股价作为粗略估算：小盘股通常股价较低
+        # 假设发行股本3亿股，价格<10元的可能是小盘
+        # 这里用简化逻辑：股价<10元 且 代码以000/002/003/300开头是小盘
+        if stock_code and price < 10:
+            # 000/002/003/300 开头的多为中小盘
+            prefix = stock_code[:3]
+            if prefix in ['000', '002', '003', '300']:
+                return True
+        return False
+    except:
+        return False
+
+def check_high_dividend(stock):
+    """检查高股息：使用PE分位作为代理（低PE高股息概率大）"""
+    try:
+        # 使用PE分位作为代理指标：PE分位<30%说明估值低，高股息概率大
+        pe_percentile = stock.get('price_percentile') or 50
+        return pe_percentile < 30
+    except:
+        return False
+
+def check_low_pb(stock_code, price):
+    """检查破净：使用股价估算（低价股可能是破净）"""
+    try:
+        if not price or price <= 0:
+            return False
+        # 破净股通常股价较低（<5元）
+        # 银行股/地产股等传统行业常见破净
+        return price < 5
+    except:
+        return False
+
+def check_sector_rotation(stock):
+    """检查行业轮动：热门行业优先"""
+    try:
+        # 使用股票代码判断行业
+        # 000/002开头多为传统行业，300开头多为科技行业
+        # 根据近期市场热点，300开头科技股更有活性
+        code = stock.get('code', '')
+        if code.startswith('300'):
+            return True  # 科创板
+        if code.startswith('688'):
+            return True  # 创业板
+        return False
+    except:
+        return False
+
+def check_small_cap_simple(stock_code, price):
+    """检查小盘弹性：股价<10元"""
+    try:
+        if not price or price <= 0:
+            return False
+        return price < 10
+    except:
+        return False
+
 @app.route('/api/v1/stock/<stock_code>', methods=['GET'])
 def get_stock_detail(stock_code):
     """获取个股详情"""

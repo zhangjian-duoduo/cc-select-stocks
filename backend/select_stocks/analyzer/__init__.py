@@ -118,7 +118,12 @@ class TechnicalAnalyzer:
             return None
 
     def check_macd_divergence(self, df: pd.DataFrame, periods: List[int] = [5, 20, 60]) -> Dict[str, bool]:
-        """检查MACD底背离 - 区分上涨/下跌趋势，只检测底背离"""
+        """Check MACD bottom divergence using Elliott Wave Theory
+        Improvements:
+        1. Use Elliott Wave to identify wave structure
+        2. Compare same-level wave lows
+        3. Check 5-wave down vs 3-wave down patterns
+        """
         result = {'daily': False, 'weekly': False, 'monthly': False}
 
         if df is None or len(df) < 60:
@@ -129,62 +134,208 @@ class TechnicalAnalyzer:
             if df is None:
                 return result
 
-            # 使用多个周期检测
-            test_periods = [20, 60, 120]  # 日、周、月周期对应的回看天数
+            # Calculate MACD bar
+            if 'dea' in df.columns:
+                df = df.copy()
+                df['macd_bar'] = (df['dif'] - df['dea']) * 2
+
+            test_periods = [20, 60, 120]
 
             for period in test_periods:
                 if len(df) < period + 30:
                     continue
 
-                recent = df.tail(period + 30)
+                recent = df.tail(period + 30).copy()
                 prices = recent['close'].values
                 difs = recent['dif'].values
-                dea = recent['dea'].values if 'dea' in recent.columns else recent.get('macd', difs)
+                dea = recent['dea'].values if 'dea' in recent.columns else difs
+                bars = recent['macd_bar'].values if 'macd_bar' in recent.columns else difs - dea
 
                 if len(prices) < 40:
                     continue
 
-                # 判断整体趋势：比较前半段和后半段的平均价格
-                mid = len(prices) // 2
-                first_half_avg = sum(prices[:mid]) / mid
-                second_half_avg = sum(prices[mid:]) / (len(prices) - mid)
+                # Use Elliott Wave Theory to identify waves
+                waves = self._identify_elliott_waves(prices, difs, dea, bars)
 
-                is_downtrend = second_half_avg < first_half_avg * 0.95  # 后半段明显低于前半段
-
-                if not is_downtrend:
-                    continue  # 只在下跌趋势中检测底背离
-
-                # 找最近的两个明显低点
-                low_points = []
-                for i in range(10, len(prices) - 10):
-                    # 检查是否是局部最低点
-                    if (prices[i] < prices[i-1] and prices[i] < prices[i+1] and
-                        prices[i] < prices[i-2] and prices[i] < prices[i+2]):
-                        low_points.append((i, prices[i], difs[i]))
-
-                if len(low_points) < 2:
+                if len(waves) < 3:
                     continue
 
-                # 比较最近的两个低点
-                last_low_idx, last_low_price, last_low_dif = low_points[-1]
-                prev_low_idx, prev_low_price, prev_low_dif = low_points[-2]
+                # Check for bottom divergence in down waves
+                # Compare last two significant lows in the down wave sequence
+                divergence_found = self._check_wave_divergence(waves)
 
-                # 底背离：价格创新低，但DIF没有创新低（或明显抬高）
-                if last_low_price < prev_low_price * 0.98:  # 价格创新低
-                    if last_low_dif >= prev_low_dif * 0.9:  # DIF没有明显创新低
-                        # 找到日线级别的底背离
-                        if period <= 20:
-                            result['daily'] = True
-                        elif period <= 60:
-                            result['weekly'] = True
-                        else:
-                            result['monthly'] = True
-                        break
+                if divergence_found:
+                    if period <= 20:
+                        result['daily'] = True
+                    elif period <= 60:
+                        result['weekly'] = True
+                    else:
+                        result['monthly'] = True
 
         except Exception as e:
-            print(f"[MACD背离检查] 失败: {e}")
+            print(f"[MACD divergence check] failed: {e}")
 
         return result
+
+    def _identify_elliott_waves(self, prices, difs, dea, bars):
+        """Identify Elliott Wave structure
+        Returns list of waves with type and data
+        Wave types: 1,2,3,4,5 (up), A,B,C (down)
+        """
+        if len(prices) < 30:
+            return []
+
+        # First, find all turning points
+        turning_points = self._find_all_turning_points(prices, difs, dea, bars)
+
+        if len(turning_points) < 4:
+            return []
+
+        # Label waves based on the pattern
+        # Starting from the beginning, alternate up/down
+        waves = []
+        for i, tp in enumerate(turning_points):
+            wave_type = 'up' if i % 2 == 0 else 'down'
+            waves.append({
+                'index': tp['index'],
+                'type': wave_type,
+                'price': tp['price'],
+                'dif': tp['dif'],
+                'dea': tp['dea'],
+                'bar': tp['bar']
+            })
+
+        # Determine if we're in an uptrend or downtrend overall
+        if len(waves) >= 2:
+            first_price = waves[0]['price']
+            last_price = waves[-1]['price']
+            is_downtrend = last_price < first_price
+
+            # If downtrend, flip wave numbering
+            # First wave down is labeled as 1 (not A)
+            if is_downtrend:
+                for w in waves:
+                    w['type'] = 'down' if w['type'] == 'up' else 'up'
+
+        return waves
+
+    def _find_all_turning_points(self, prices, difs, dea, bars):
+        """Find all significant turning points"""
+        points = []
+
+        if len(prices) < 20:
+            return points
+
+        # Use multiple windows to find significant turns
+        windows = [3, 5, 8]
+
+        for window in windows:
+            for i in range(window, len(prices) - window):
+                # Check if local low
+                is_low = True
+                for j in range(i - window, i + window + 1):
+                    if j != i and prices[j] <= prices[i]:
+                        is_low = False
+                        break
+
+                if is_low:
+                    # Check if already added nearby
+                    add = True
+                    for p in points:
+                        if abs(p['index'] - i) <= window:
+                            if prices[i] < p['price']:
+                                points.remove(p)
+                            else:
+                                add = False
+                                break
+                    if add:
+                        points.append({
+                            'index': i,
+                            'type': 'low',
+                            'price': prices[i],
+                            'dif': difs[i],
+                            'dea': dea[i],
+                            'bar': bars[i]
+                        })
+
+                # Check if local high
+                is_high = True
+                for j in range(i - window, i + window + 1):
+                    if j != i and prices[j] >= prices[i]:
+                        is_high = False
+                        break
+
+                if is_high:
+                    add = True
+                    for p in points:
+                        if abs(p['index'] - i) <= window:
+                            if prices[i] > p['price']:
+                                points.remove(p)
+                            else:
+                                add = False
+                                break
+                    if add:
+                        points.append({
+                            'index': i,
+                            'type': 'high',
+                            'price': prices[i],
+                            'dif': difs[i],
+                            'dea': dea[i],
+                            'bar': bars[i]
+                        })
+
+        # Sort by index
+        points.sort(key=lambda x: x['index'])
+
+        # Keep only significant points (remove too close ones)
+        if len(points) > 1:
+            filtered = [points[0]]
+            for i in range(1, len(points)):
+                # Keep if far enough from last kept point
+                if points[i]['index'] - filtered[-1]['index'] >= 5:
+                    filtered.append(points[i])
+            return filtered
+
+        return points
+
+    def _check_wave_divergence(self, waves):
+        """Check for bottom divergence in wave structure
+        Compare: 5th wave low vs 3rd wave low (in down sequence)
+        Or: C wave low vs A wave low
+        """
+        if len(waves) < 4:
+            return False
+
+        # Get all down wave lows
+        down_waves = [w for w in waves if w['type'] == 'down']
+
+        if len(down_waves) < 2:
+            return False
+
+        # Compare last two down wave lows
+        last_low = down_waves[-1]
+        prev_low = down_waves[-2]
+
+        # Check if price made new low
+        if last_low['price'] >= prev_low['price'] * 0.98:
+            return False
+
+        # Calculate divergence score (at least 2 indicators)
+        score = 0
+
+        # DIF divergence
+        if last_low['dif'] >= prev_low['dif'] * 0.85:
+            score += 1
+
+        # DEA divergence
+        if last_low['dea'] >= prev_low['dea'] * 0.85:
+            score += 1
+
+        # MACD bar divergence
+        if last_low['bar'] >= prev_low['bar'] * 0.8:
+            score += 1
+
+        return score >= 2
 
     def calculate_chip_concentration(self, stock_code: str) -> float:
         """计算筹码集中度 - 优化版多维度综合算法

@@ -151,7 +151,7 @@ class StockViewModel: ObservableObject {
         applySort()
     }
 
-    private func applySort() {
+    func applySort() {
         let sorted = stocks.sorted { stock1, stock2 in
             let value1 = sortValue(for: stock1)
             let value2 = sortValue(for: stock2)
