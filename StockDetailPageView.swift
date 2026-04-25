@@ -135,31 +135,9 @@ struct StockDetailContent: View {
                     k线趋势图(kline: kline)
                 }
 
-                // 5年涨跌
-                if let change5y = stock.change_5y {
-                    HStack {
-                        Text("5年涨跌")
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Spacer()
-                        Text(String(format: "%.2f%%", change5y))
-                            .font(.title3)
-                            .fontWeight(.semibold)
-                            .foregroundColor(change5y >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                    }
-                    .padding()
-                    .background(Color(hex: "1E1E1E"))
-                    .cornerRadius(12)
-                }
-
                 // 价格分位
                 if let pricePct = stock.price_percentile {
                     价格分位View(pricePct: pricePct)
-                }
-
-                // MACD底背离
-                if let macd = stock.macd_divergence {
-                    macd底背离View(macd: macd)
                 }
 
                 // 趋势分析
@@ -547,62 +525,6 @@ struct StockDetailContent: View {
                 }
                 .padding(.leading)
             }
-        }
-        .padding()
-        .background(Color(hex: "1E1E1E"))
-        .cornerRadius(12)
-    }
-
-    @ViewBuilder
-    func macd底背离View(macd: Stock.MACDDivergence) -> some View {
-        let hasDivergence = (macd.daily == true || macd.weekly == true || macd.monthly == true)
-        VStack(alignment: .leading, spacing: 12) {
-            Text("MACD底背离信号")
-                .font(.headline)
-                .foregroundColor(.white)
-
-            HStack {
-                Image(systemName: hasDivergence ? "checkmark.circle.fill" : "xmark.circle.fill")
-                    .font(.title)
-                    .foregroundColor(hasDivergence ? Color(hex: "4CAF50") : Color(hex: "F44336"))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(hasDivergence ? "已出现底背离信号" : "未出现底背离信号")
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-
-                    Text(hasDivergence ? "股价创新低但MACD未创新低，反弹概率较大" : "无明显底背离信号")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                }
-
-                Spacer()
-            }
-
-            HStack(spacing: 20) {
-                VStack {
-                    Text("日线")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Image(systemName: (macd.daily ?? false) ? "checkmark.circle.fill" : "xmark.circle")
-                        .foregroundColor((macd.daily ?? false) ? Color(hex: "4CAF50") : .gray)
-                }
-                VStack {
-                    Text("周线")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Image(systemName: (macd.weekly ?? false) ? "checkmark.circle.fill" : "xmark.circle")
-                        .foregroundColor((macd.weekly ?? false) ? Color(hex: "4CAF50") : .gray)
-                }
-                VStack {
-                    Text("月线")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Image(systemName: (macd.monthly ?? false) ? "checkmark.circle.fill" : "xmark.circle")
-                        .foregroundColor((macd.monthly ?? false) ? Color(hex: "4CAF50") : .gray)
-                }
-            }
-            .padding(.top, 8)
         }
         .padding()
         .background(Color(hex: "1E1E1E"))
