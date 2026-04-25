@@ -11,6 +11,7 @@ from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 import concurrent.futures
 import time
+import threading
 
 
 class StockSelector:
@@ -251,7 +252,7 @@ class StockSelector:
         }
 
     def select_stocks(self, limit: int = 5000, etf_mode: bool = False) -> List[Dict]:
-        """执行选股 - 支持A股和ETF"""
+        """执行选股 - 支持A股和ETF（并行优化版）"""
         print(f"[选股算法] {'ETF' if etf_mode else 'A股'} 选股开始...")
 
         all_stocks = self.df.fetch_with_fallback('get_stock_list')
@@ -259,10 +260,8 @@ class StockSelector:
             print("[选股算法] 获取股票列表失败")
             return []
 
-        selected = []
-        total = len(all_stocks)
-        processed = 0
-
+        # 准备候选股票列表
+        candidates = []
         for idx, row in all_stocks.iterrows():
             stock_code = row.get('code', '')
             stock_name = row.get('name', '')
@@ -274,25 +273,55 @@ class StockSelector:
             is_etf = 'ETF' in stock_name or '指数' in stock_name
 
             if etf_mode:
-                # ETF模式：只选ETF
                 if not is_etf:
                     continue
             else:
-                # A股模式：排除ETF
                 if is_etf:
                     continue
 
-            processed += 1
-            if processed % 100 == 0:
-                print(f"[选股算法] 已处理 {processed}/{total}, 选出 {len(selected)}")
+            candidates.append((stock_code, stock_name))
 
-            result = self.evaluate_stock(stock_code, stock_name, etf_mode)
-            if result:
-                selected.append(result)
-                print(f"[选股] 选中: {stock_code} {stock_name}")
+        print(f"[选股算法] 候选股票 {len(candidates)} 只，开始并行处理...")
 
-            if len(selected) >= limit:
-                break
+        selected = []
+        processed_count = 0
+        lock = threading.Lock()
+
+        # 并行处理 - 控制并发数为8（防封IP）
+        MAX_WORKERS = 8
+
+        def process_stock(args):
+            nonlocal processed_count
+            code, name = args
+            try:
+                result = self.evaluate_stock(code, name, etf_mode)
+                with lock:
+                    processed_count += 1
+                    if processed_count % 100 == 0:
+                        print(f"[选股算法] 已处理 {processed_count}/{len(candidates)}, 选出 {len(selected)}")
+                return result
+            except Exception as e:
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # 使用as_completed保持顺序
+            futures = {executor.submit(process_stock, c): c for c in candidates}
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result:
+                    with lock:
+                        if len(selected) < limit:
+                            selected.append(result)
+                            print(f"[选股] 选中: {result['code']} {result['name']}")
+                            if len(selected) >= limit:
+                                # 取消剩余任务
+                                for f in futures:
+                                    f.cancel()
+                                break
+                # 检查是否达到限制
+                if len(selected) >= limit:
+                    break
 
         print(f"[选股算法] {'ETF' if etf_mode else 'A股'} 选股完成，共选出 {len(selected)} 只")
         return selected

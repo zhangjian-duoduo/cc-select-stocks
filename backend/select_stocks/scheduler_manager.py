@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 import pymysql
+import concurrent.futures
 
 
 # 数据库配置
@@ -43,7 +44,7 @@ def is_last_trading_day_of_month():
     return (today.day >= last_day.day - 3) and today.weekday() < 5
 
 def update_daily_kline():
-    """更新日K线数据"""
+    """更新日K线数据（并行优化版）"""
     print("[定时任务] 开始更新日K线数据...")
     import sys
     sys.path.insert(0, '/root/select_stocks')
@@ -60,26 +61,35 @@ def update_daily_kline():
         stocks = [row['code'] for row in cursor.fetchall()]
         print(f"[定时任务] 共 {len(stocks)} 只股票需要更新")
 
-        for i, code in enumerate(stocks):
+        updated = [0]
+        lock = threading.Lock()
+
+        def update_one(code):
             try:
-                time.sleep(0.2)
+                time.sleep(0.15)  # 缩短间隔
                 df = fetch_kline_data(code, 'daily')
                 if df is not None and not df.empty:
                     latest = df.tail(1)
                     save_kline_to_db(latest, code, 'daily')
-                    if (i + 1) % 100 == 0:
-                        print(f"[定时任务] 已更新 {i+1}/{len(stocks)}")
+                with lock:
+                    updated[0] += 1
+                    if updated[0] % 200 == 0:
+                        print(f"[定时任务] 已更新 {updated[0]}/{len(stocks)}")
+                return True
             except Exception as e:
-                print(f"[定时任务] {code} 更新失败: {e}")
-                continue
+                return False
 
-        print("[定时任务] 日K线更新完成")
+        # 并行处理 - 10个线程
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(update_one, stocks))
+
+        print(f"[定时任务] 日K线更新完成，共更新 {updated[0]} 只")
     finally:
         cursor.close()
         conn.close()
 
 def update_weekly_kline():
-    """更新周K线数据"""
+    """更新周K线数据（并行优化版）"""
     print("[定时任务] 开始更新周K线数据...")
     import sys
     sys.path.insert(0, '/root/select_stocks')
@@ -93,17 +103,27 @@ def update_weekly_kline():
         stocks = [row['code'] for row in cursor.fetchall()]
         print(f"[定时任务] 共 {len(stocks)} 只股票需要更新")
 
-        for i, code in enumerate(stocks):
+        updated = [0]
+        lock = threading.Lock()
+
+        def update_one(code):
             try:
-                time.sleep(0.3)
+                time.sleep(0.2)
                 df = fetch_kline_data(code, 'weekly')
                 if df is not None and not df.empty:
                     latest = df.tail(1)
                     save_kline_to_db(latest, code, 'weekly')
+                with lock:
+                    updated[0] += 1
+                return True
             except Exception as e:
-                continue
+                return False
 
-        print("[定时任务] 周K线更新完成")
+        # 并行处理 - 10个线程
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            list(executor.map(update_one, stocks))
+
+        print(f"[定时任务] 周K线更新完成，共更新 {updated[0]} 只")
     finally:
         cursor.close()
         conn.close()

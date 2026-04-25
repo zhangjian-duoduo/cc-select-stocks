@@ -6,7 +6,7 @@ API接口模块
 
 from flask import Flask, jsonify, request
 import pymysql
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -183,6 +183,8 @@ def get_stock_detail(stock_code):
 @app.route('/api/v1/refresh', methods=['POST'])
 def refresh_stocks():
     """手动刷新选股结果"""
+    import sys
+    sys.path.insert(0, '/root/select_stocks')
     import json
     from stock_selector import StockSelector
     from data_fetcher import DataFetcher
@@ -235,7 +237,69 @@ def refresh_stocks():
 
         conn.commit()
 
+        # 保存历史记录
+        today = datetime.now().strftime('%Y-%m-%d')
+        for stock in selected_stocks:
+            cursor.execute("""
+                INSERT INTO stock_history (code, name, selected_at)
+                VALUES (%s, %s, %s)
+            """, (stock['code'], stock['name'], today))
+
+        conn.commit()
+
         return jsonify({'code': 0, 'message': f'选股完成，共选出 {len(selected_stocks)} 只股票'})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/changes', methods=['GET'])
+def get_stock_changes():
+    """获取今日与昨日的股票变化"""
+    conn = None
+    cursor = None
+
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        today = datetime.now().strftime('%Y-%m-%d')
+        yesterday = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+
+        # 获取今日选中的股票
+        cursor.execute("SELECT code, name FROM stocks")
+        today_stocks = {row['code']: row['name'] for row in cursor.fetchall()}
+
+        # 获取昨日选中的股票
+        cursor.execute("SELECT code, name FROM stock_history WHERE selected_at = %s", (yesterday,))
+        yesterday_stocks = {row['code']: row['name'] for row in cursor.fetchall()}
+
+        # 今日新增的股票
+        new_stocks = []
+        for code, name in today_stocks.items():
+            if code not in yesterday_stocks:
+                new_stocks.append({'code': code, 'name': name, 'type': 'new'})
+
+        # 今日剔除的股票
+        removed_stocks = []
+        for code, name in yesterday_stocks.items():
+            if code not in today_stocks:
+                removed_stocks.append({'code': code, 'name': name, 'type': 'removed'})
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'date': today,
+                'new': new_stocks,
+                'removed': removed_stocks,
+                'new_count': len(new_stocks),
+                'removed_count': len(removed_stocks)
+            }
+        })
 
     except Exception as e:
         return jsonify({'code': 1, 'message': str(e)})
@@ -248,6 +312,8 @@ def refresh_stocks():
 @app.route('/api/v1/refresh_analysis', methods=['POST'])
 def refresh_analysis():
     """只刷新现有股票的分析数据，不重新选股"""
+    import sys
+    sys.path.insert(0, '/root/select_stocks')
     import json
     from data_fetcher import DataFetcher
     from analyzer import TechnicalAnalyzer
@@ -509,6 +575,8 @@ def update_prices():
 @app.route('/api/v1/refresh_analysis_scheduled', methods=['POST'])
 def refresh_analysis_scheduled():
     """定时任务：下午4点更新分析数据"""
+    import sys
+    sys.path.insert(0, '/root/select_stocks')
     import json
     from data_fetcher import DataFetcher
     from analyzer import TechnicalAnalyzer

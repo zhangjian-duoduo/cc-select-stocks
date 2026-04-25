@@ -13,6 +13,13 @@ struct ContentView: View {
             }
 
             NavigationStack {
+                ChangesView()
+            }
+            .tabItem {
+                Label("变化", systemImage: "arrow.left.arrow.right")
+            }
+
+            NavigationStack {
                 FilterView()
             }
             .tabItem {
