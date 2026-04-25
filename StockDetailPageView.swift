@@ -539,40 +539,57 @@ struct StockDetailContent: View {
                 .foregroundColor(.white)
 
             HStack {
-                VStack {
-                    Text("短期")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text(trend.short ?? "-")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                }
+                趋势标签(title: "短期", value: trend.short)
                 Spacer()
-                VStack {
-                    Text("中期")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text(trend.medium ?? "-")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                }
+                趋势标签(title: "中期", value: trend.medium)
                 Spacer()
-                VStack {
-                    Text("长期")
-                        .font(.caption)
-                        .foregroundColor(.gray)
-                    Text(trend.long ?? "-")
-                        .font(.subheadline)
-                        .fontWeight(.medium)
-                        .foregroundColor(.white)
-                }
+                趋势标签(title: "长期", value: trend.long)
             }
         }
         .padding()
         .background(Color(hex: "1E1E1E"))
         .cornerRadius(12)
+    }
+
+    @ViewBuilder
+    func 趋势标签(title: String, value: String?) -> some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.gray)
+            趋势图标(value: value ?? "-")
+            Text(趋势文字(value: value ?? "-"))
+                .font(.caption)
+                .foregroundColor(.gray)
+        }
+    }
+
+    @ViewBuilder
+    func 趋势图标(value: String) -> some View {
+        switch value {
+        case "上涨趋势":
+            Image(systemName: "arrow.up.right")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(Color(hex: "FF5252"))
+        case "下跌趋势":
+            Image(systemName: "arrow.down.right")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(Color(hex: "4CAF50"))
+        default:
+            Image(systemName: "minus")
+                .font(.system(size: 24, weight: .bold))
+                .foregroundColor(Color(hex: "FFEB3B"))
+        }
+    }
+
+    func 趋势文字(value: String) -> String {
+        switch value {
+        case "上涨趋势": return "上涨"
+        case "下跌趋势": return "下跌"
+        case "震荡筑底", "长期筑底": return "筑底"
+        case "震荡": return "震荡"
+        default: return "未知"
+        }
     }
 
     @ViewBuilder

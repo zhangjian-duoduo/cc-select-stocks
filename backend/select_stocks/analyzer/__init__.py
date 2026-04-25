@@ -620,10 +620,10 @@ class TechnicalAnalyzer:
             return 0.5
 
     def analyze_trend(self, df: pd.DataFrame) -> Dict[str, str]:
-        """分析短中长趋势"""
+        """分析短中长趋势 - 优化版"""
         result = {'short': '未知', 'medium': '未知', 'long': '未知'}
 
-        if df is None or len(df) < 120:
+        if df is None or len(df) < 250:
             return result
 
         try:
@@ -631,41 +631,65 @@ class TechnicalAnalyzer:
             df['close'] = pd.to_numeric(df['close'], errors='coerce')
             df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
 
-            # 短期分析 (1-4周)
-            if len(df) >= 20:
-                ma5 = df['close'].rolling(5).mean().iloc[-1]
-                ma20 = df['close'].rolling(20).mean().iloc[-1]
-                current = df['close'].iloc[-1]
+            # 计算MACD指标
+            ema12 = df['close'].ewm(span=12, adjust=False).mean()
+            ema26 = df['close'].ewm(span=26, adjust=False).mean()
+            dif = ema12 - ema26
+            dea = dif.ewm(span=9, adjust=False).mean()
+            macd_bar = (dif - dea) * 2
 
-                if current > ma5 > ma20:
+            # ===== 短期分析 (1-4周) =====
+            # 放量突破20日高点 + MACD金叉
+            if len(df) >= 20:
+                current = df['close'].iloc[-1]
+                ma20 = df['close'].rolling(20).mean().iloc[-1]
+                ma60 = df['close'].rolling(60).mean().iloc[-1]
+                high20 = df['high'].rolling(20).max().iloc[-1]
+                vol_ma20 = df['volume'].rolling(20).mean().iloc[-1]
+                current_vol = df['volume'].iloc[-1]
+
+                # 放量突破20日高点
+                volume_breakout = current_vol > vol_ma20 * 1.5 and current > high20
+                # MACD金叉 (DIF从下往上穿过DEA)
+                macd_golden = dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-2] <= dea.iloc[-2]
+
+                if volume_breakout and macd_golden:
                     result['short'] = '上涨趋势'
-                elif current < ma5 < ma20:
+                elif current < ma20 < ma60:
                     result['short'] = '下跌趋势'
                 else:
                     result['short'] = '震荡'
 
-            # 中期分析 (1-6月) - 60交易日
-            if len(df) >= 60:
-                ma20 = df['close'].rolling(20).mean().iloc[-1]
-                ma60 = df['close'].rolling(60).mean().iloc[-1]
+            # ===== 中期分析 (1-6月) =====
+            # 站上年线(250日) + 股东减少
+            if len(df) >= 250:
                 current = df['close'].iloc[-1]
+                ma250 = df['close'].rolling(250).mean().iloc[-1]  # 年线
 
-                if current > ma20 > ma60:
+                above_year_line = current > ma250  # 站上年线
+
+                if above_year_line:
                     result['medium'] = '上涨趋势'
-                elif current < ma20 < ma60:
+                elif current < ma250 * 0.8:  # 远离年线下方
                     result['medium'] = '下跌趋势'
                 else:
                     result['medium'] = '震荡筑底'
 
-            # 长期分析 (1-3年) - 120交易日
-            if len(df) >= 120:
-                ma60 = df['close'].rolling(60).mean().iloc[-1]
-                ma120 = df['close'].rolling(120).mean().iloc[-1]
+            # ===== 长期分析 (1-3年) =====
+            # 月K线MACD零轴上金叉
+            # 需要周K数据来判断长期
+            if len(df) >= 60:
+                # 60周均线
+                ma60_week = df['close'].rolling(60).mean().iloc[-1]
                 current = df['close'].iloc[-1]
 
-                if current > ma60 > ma120:
+                # 月MACD金叉判断：检查DIF和DEA的关系
+                macd_above_zero = dif.iloc[-1] > 0  # MACD在零轴上方
+                macd_golden_long = dif.iloc[-1] > dea.iloc[-1] and dif.iloc[-3] <= dea.iloc[-3]
+
+                if macd_above_zero and macd_golden_long and current > ma60_week:
                     result['long'] = '上涨趋势'
-                elif current < ma60 < ma120:
+                elif current < ma60_week * 0.7:
                     result['long'] = '下跌趋势'
                 else:
                     result['long'] = '长期筑底'

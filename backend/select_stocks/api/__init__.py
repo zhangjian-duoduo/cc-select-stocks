@@ -431,7 +431,6 @@ def get_stock_detail(stock_code):
             result['price_percentile'] = analysis.get('price_percentile', 50)
             result['chip_concentration'] = analysis.get('chip_concentration', 0.5)
             result['macd_divergence'] = analysis.get('macd_divergence', '{}')
-            result['trend_analysis'] = analysis.get('trend_analysis', '{}')
 
         # 支持日/周/月K线 - 返回所有数据
         periods = ['daily', 'weekly', 'monthly']
@@ -459,6 +458,22 @@ def get_stock_detail(stock_code):
 
         # 兼容旧版本
         result['kline'] = result.get('kline_daily', [])
+
+        # 实时计算趋势分析
+        import sys
+        sys.path.insert(0, '/root/select_stocks')
+        import pandas as pd
+        from analyzer import TechnicalAnalyzer
+        from data_fetcher import DataFetcher
+        if result.get('kline_daily'):
+            df = pd.DataFrame(result['kline_daily'])
+            df['close'] = pd.to_numeric(df['close'], errors='coerce')
+            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+            df['high'] = pd.to_numeric(df['high'], errors='coerce')
+            ta = TechnicalAnalyzer(DataFetcher())
+            result['trend_analysis'] = ta.analyze_trend(df)
+        else:
+            result['trend_analysis'] = {'short': '未知', 'medium': '未知', 'long': '未知'}
 
         return jsonify({'code': 0, 'data': result})
 
