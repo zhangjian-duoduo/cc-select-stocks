@@ -436,6 +436,18 @@ struct StockDetailView: View {
                             }
                         }
                         .frame(height: 160)
+                        .chartXAxis {
+                            AxisMarks(position: .bottom) { _ in
+                                AxisValueLabel()
+                                    .foregroundStyle(Color.gray)
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) { _ in
+                                AxisValueLabel()
+                                    .foregroundStyle(Color.gray)
+                            }
+                        }
                         .chartOverlay { proxy in
                             GeometryReader { geometry in
                                 Rectangle()
@@ -472,25 +484,6 @@ struct StockDetailView: View {
                             .padding(.vertical, 6)
                             .background(Color(hex: "1E1E1E"))
                             .cornerRadius(8)
-                        }
-                        .chartXAxis {
-                            AxisMarks(values: holders.indices) { index in
-                                if let i = index.as(Int.self), i % max(1, holders.count / 6) == 0 {
-                                    AxisValueLabel {
-                                        if i < holders.count {
-                                            Text(holders[i].date ?? "")
-                                                .font(.caption2)
-                                                .foregroundStyle(Color.gray)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .chartYAxis {
-                            AxisMarks(position: .leading) { _ in
-                                AxisValueLabel()
-                                    .foregroundStyle(Color.gray)
-                            }
                         }
 
                         // 统计信息

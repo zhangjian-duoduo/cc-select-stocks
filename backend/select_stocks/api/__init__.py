@@ -145,6 +145,30 @@ def get_stock_detail(stock_code):
             result['macd_divergence'] = analysis.get('macd_divergence', '{}')
             result['trend_analysis'] = analysis.get('trend_analysis', '{}')
 
+        # 获取K线数据（最近250条日K）
+        cursor.execute("""
+            SELECT date, open, high, low, close, volume
+            FROM stock_kline
+            WHERE code = %s AND period = 'daily'
+            ORDER BY date DESC
+            LIMIT 250
+        """, (stock_code,))
+        kline_rows = cursor.fetchall()
+
+        # 按日期升序排列
+        kline_data = []
+        for row in reversed(kline_rows):
+            kline_data.append({
+                'date': row['date'].strftime('%Y-%m-%d') if row.get('date') else '',
+                'open': float(row['open']) if row.get('open') else 0,
+                'high': float(row['high']) if row.get('high') else 0,
+                'low': float(row['low']) if row.get('low') else 0,
+                'close': float(row['close']) if row.get('close') else 0,
+                'volume': float(row['volume']) if row.get('volume') else 0
+            })
+
+        result['kline'] = kline_data
+
         return jsonify({'code': 0, 'data': result})
 
     except Exception as e:
