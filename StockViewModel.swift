@@ -193,9 +193,10 @@ class StockViewModel: ObservableObject {
             return stock.chip_concentration ?? 0
         case .shareholder:
             // 股东人数变化百分比（5年趋势）
+            // 数据已按旧→新排列，所以first是最旧的，last是最新的
             guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-            let oldest = trend.last?.holders ?? 0
-            let newest = trend.first?.holders ?? 0
+            let oldest = trend.first?.holders ?? 0
+            let newest = trend.last?.holders ?? 0
             if oldest > 0 {
                 return Double(newest - oldest) / Double(oldest) * 100
             }
@@ -214,9 +215,10 @@ class StockViewModel: ObservableObject {
 
     // 计算股东人数变化百分比
     func shareholderChangePercent(_ stock: Stock) -> Double {
+        // 数据已按旧→新排列，所以first是最旧的，last是最新的
         guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-        let oldest = trend.last?.holders ?? 0
-        let newest = trend.first?.holders ?? 0
+        let oldest = trend.first?.holders ?? 0
+        let newest = trend.last?.holders ?? 0
         if oldest > 0 {
             return Double(newest - oldest) / Double(oldest) * 100
         }

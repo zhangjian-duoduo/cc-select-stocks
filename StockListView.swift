@@ -259,8 +259,9 @@ struct StockCard: View {
 
     func shareholderChangePercent() -> Double {
         guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-        let oldest = trend.last?.holders ?? 0
-        let newest = trend.first?.holders ?? 0
+        // 数据已按旧→新排列，所以first是最旧的，last是最新的
+        let oldest = trend.first?.holders ?? 0
+        let newest = trend.last?.holders ?? 0
         if oldest > 0 {
             return Double(newest - oldest) / Double(oldest) * 100
         }
@@ -270,8 +271,9 @@ struct StockCard: View {
     func shareholderTrendValue() -> String {
         // 显示5年来股东人数变化百分比
         guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
-        let oldest = trend.last?.holders ?? 0
-        let newest = trend.first?.holders ?? 0
+        // 数据已按旧→新排列，所以first是最旧的，last是最新的
+        let oldest = trend.first?.holders ?? 0
+        let newest = trend.last?.holders ?? 0
         guard oldest > 0 else { return "-" }
         let pct = Double(newest - oldest) / Double(oldest) * 100
         if pct > 0 {
