@@ -51,6 +51,7 @@ struct StockListView: View {
                     }
                 }
                 .listStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
             }
         }
         .background(Color(hex: "121212"))
@@ -221,7 +222,7 @@ struct StockCard: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
     }
 
     func divergenceDots() -> String {
@@ -342,7 +343,7 @@ struct SortMetricView: View {
                 .foregroundColor(isHighlighted ? color : .gray)
         }
         .frame(width: 44)
-        .padding(.vertical, 4)
+        .padding(.vertical, 2)
         .background(isHighlighted ? color.opacity(0.2) : Color.clear)
         .cornerRadius(6)
     }
@@ -506,7 +507,7 @@ struct StockDetailView: View {
                                     .foregroundColor(Color(hex: "1E88E5"))
                             }
                             .padding(.horizontal, 12)
-                            .padding(.vertical, 4)
+                            .padding(.vertical, 2)
                             .background(Color(hex: "1E1E1E"))
                             .cornerRadius(8)
                         }
@@ -574,7 +575,7 @@ struct StockDetailView: View {
                                         .font(.subheadline)
                                         .fontWeight(selectedKlinePeriod == period ? .semibold : .regular)
                                         .padding(.horizontal, 16)
-                                        .padding(.vertical, 4)
+                                        .padding(.vertical, 2)
                                         .background(selectedKlinePeriod == period ? Color(hex: "1E88E5") : Color(hex: "2C2C2C"))
                                         .foregroundColor(selectedKlinePeriod == period ? .white : .gray)
                                         .cornerRadius(16)
