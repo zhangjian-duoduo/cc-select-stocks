@@ -139,6 +139,7 @@ class StockViewModel: ObservableObject {
     @MainActor
     func refresh() async {
         await loadData()
+        await updatePrices()
     }
 
     func toggleSort(_ option: SortOption) {

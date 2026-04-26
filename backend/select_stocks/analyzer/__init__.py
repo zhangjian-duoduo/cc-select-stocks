@@ -902,6 +902,9 @@ class TechnicalAnalyzer:
         # 价格位置
         price_position = self.get_price_position(stock_code)
 
+        # 财务数据
+        financial = self.get_financial_data(stock_code)
+
         return {
             'code': stock_code,
             'holders_trend': holders_trend,
@@ -910,8 +913,80 @@ class TechnicalAnalyzer:
             'chip_concentration': chip_conc,
             'macd_divergence': macd_div,
             'trend_analysis': trend,
-            'price_position': price_position
+            'price_position': price_position,
+            'net_profit_yoy': financial.get('net_profit_yoy', ''),
+            'net_profit_qoq': financial.get('net_profit_qoq', ''),
+            'roe': financial.get('roe', ''),
+            'sector': financial.get('sector', '')
         }
+
+    def get_financial_data(self, stock_code: str) -> Dict:
+        """获取财务数据"""
+        import akshare as ak
+        import pandas as pd
+
+        result = {'net_profit_yoy': '', 'net_profit_qoq': '', 'roe': '', 'sector': ''}
+
+        try:
+            # 获取财务摘要
+            df = ak.stock_financial_abstract_ths(symbol=stock_code)
+            if df is not None and len(df) > 0:
+                # 按日期排序
+                df['报告期'] = pd.to_datetime(df['报告期'], errors='coerce')
+                df = df.sort_values('报告期', ascending=False)
+
+                # 找最新有ROE的数据
+                latest = None
+                for _, row in df.iterrows():
+                    if row.get('净资产收益率-摊薄') and row.get('净资产收益率-摊薄') != False:
+                        latest = row
+                        break
+
+                if latest:
+                    # ROE
+                    roe_raw = latest.get('净资产收益率-摊薄')
+                    if roe_raw and roe_raw != False:
+                        result['roe'] = str(roe_raw).replace('%', '')
+
+                    # 净利润同比
+                    yoy_raw = latest.get('净利润同比增长率')
+                    if yoy_raw is not None and yoy_raw != False:
+                        result['net_profit_yoy'] = str(yoy_raw).replace('%', '')
+
+                    # 净利润环比（需要计算）
+                    if len(df) > 1:
+                        curr_net = latest.get('净利润', '0')
+                        for _, prev_row in df.iterrows():
+                            if prev_row.get('净利润') and prev_row.get('净利润') != False:
+                                prev_net = prev_row.get('净利润', '0')
+                                try:
+                                    def parse_money(val):
+                                        val = str(val)
+                                        num = float(val.replace('亿', '').replace('万', ''))
+                                        if '亿' in val:
+                                            num *= 10000
+                                        return num
+                                    curr_val = parse_money(curr_net)
+                                    prev_val = parse_money(prev_net)
+                                    if prev_val != 0:
+                                        qoq = (curr_val - prev_val) / abs(prev_val) * 100
+                                        result['net_profit_qoq'] = f"{qoq:.1f}%"
+                                    break
+                                except:
+                                    break
+        except Exception as e:
+            print(f"[财务数据] {stock_code} 获取失败: {e}")
+
+        # 获取板块
+        try:
+            info = ak.stock_individual_info_em(symbol=stock_code)
+            sector_row = info[info['item'] == '行业']
+            if not sector_row.empty:
+                result['sector'] = str(sector_row.iloc[0]['value'])
+        except:
+            pass
+
+        return result
 
 
 if __name__ == "__main__":

@@ -84,32 +84,26 @@ struct StockDetailContent: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // 基本信息
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        VStack(alignment: .leading) {
-                            Text(stock.name)
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
-                            Text(stock.code)
-                                .font(.subheadline)
-                                .foregroundColor(.gray)
-                        }
-                        Spacer()
-                    }
-
-                    HStack {
-                        Text("当前价格")
+                // 股票基本信息（板块）
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(stock.name)
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.white)
+                    Text(stock.code)
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    if let sector = stock.sector, !sector.isEmpty {
+                        Text(sector)
                             .font(.caption)
-                            .foregroundColor(.gray)
-                        Spacer()
-                        Text(String(format: "¥%.2f", stock.price ?? 0))
-                            .font(.title)
-                            .fontWeight(.bold)
-                            .foregroundColor(.white)
+                            .foregroundColor(Color(hex: "1E88E5"))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color(hex: "1E88E5").opacity(0.2))
+                            .cornerRadius(4)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
                 .background(Color(hex: "1E1E1E"))
                 .cornerRadius(12)
@@ -171,6 +165,22 @@ struct StockDetailContent: View {
         case .monthly:
             return stock.kline_monthly
         }
+    }
+
+    // 财务数据详情文本
+    private func financialDetailText() -> String {
+        guard let stock = detailedStock else { return "" }
+        var parts: [String] = []
+        if let yoy = stock.net_profit_yoy, !yoy.isEmpty {
+            parts.append("同比\(yoy)")
+        }
+        if let qoq = stock.net_profit_qoq, !qoq.isEmpty {
+            parts.append("环比\(qoq)")
+        }
+        if let roeVal = stock.roe, !roeVal.isEmpty {
+            parts.append("ROE \(roeVal)")
+        }
+        return parts.joined(separator: " | ")
     }
 
     // MARK: - 子视图组件

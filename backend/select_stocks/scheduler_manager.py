@@ -225,8 +225,8 @@ def update_analysis():
 
                 cursor.execute("""
                     INSERT INTO stock_analysis
-                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position, net_profit_yoy, net_profit_qoq, roe, sector)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     code,
                     json.dumps(analysis.get('holders_trend', [])),
@@ -235,7 +235,11 @@ def update_analysis():
                     analysis.get('chip_concentration', 0.5),
                     json.dumps(analysis.get('macd_divergence', {})),
                     json.dumps(analysis.get('trend_analysis', {})),
-                    analysis.get('price_position', 0.5)
+                    analysis.get('price_position', 0.5),
+                    analysis.get('net_profit_yoy', ''),
+                    analysis.get('net_profit_qoq', ''),
+                    analysis.get('roe', ''),
+                    analysis.get('sector', '')
                 ))
                 updated += 1
 

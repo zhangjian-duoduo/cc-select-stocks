@@ -221,9 +221,61 @@ struct StockCard: View {
                         .font(.system(size: 9))
                         .foregroundColor(.gray)
                 }
+
+                // 财务数据: ROE
+                VStack(spacing: 0) {
+                    Text(stock.roe ?? "-")
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForROE())
+                    Text("ROE")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
+
+                // 财务数据: 净利润同比/环比
+                VStack(spacing: 0) {
+                    Text(financialDisplay())
+                        .font(.system(size: 10))
+                        .foregroundColor(colorForFinancial())
+                    Text("利润")
+                        .font(.system(size: 9))
+                        .foregroundColor(.gray)
+                }
             }
         }
         .padding(.vertical, 0)
+    }
+
+    func colorForROE() -> Color {
+        guard let roe = stock.roe, let value = Double(roe) else { return Color.gray }
+        if value > 15 {
+            return Color(hex: "FF5252")  // 高ROE=红色
+        } else if value > 8 {
+            return Color(hex: "FFEB3B")  // 中等=黄色
+        }
+        return Color.gray
+    }
+
+    func financialDisplay() -> String {
+        let yoy = stock.net_profit_yoy ?? ""
+        let qoq = stock.net_profit_qoq ?? ""
+
+        var parts: [String] = []
+        if !yoy.isEmpty { parts.append(yoy) }
+        if !qoq.isEmpty { parts.append(qoq) }
+
+        return parts.isEmpty ? "-" : parts.joined(separator: "/")
+    }
+
+    func colorForFinancial() -> Color {
+        // 同比/环比正数=绿色，负数=红色
+        let yoy = stock.net_profit_yoy ?? ""
+        if yoy.hasPrefix("-") {
+            return Color(hex: "4CAF50")  // 负增长=绿色(不好)
+        } else if !yoy.isEmpty && yoy != "-" {
+            return Color(hex: "FF5252")  // 正增长=红色(好)
+        }
+        return Color.gray
     }
 
     func divergenceDots() -> String {

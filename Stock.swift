@@ -21,6 +21,12 @@ struct Stock: Identifiable, Codable {
     var kline_weekly: [KlineData]?
     var kline_monthly: [KlineData]?
 
+    // 财务数据
+    var net_profit_yoy: String?  // 净利润同比
+    var net_profit_qoq: String?  // 净利润环比
+    var roe: String?             // ROE
+    var sector: String?          // 所属行业板块
+
     struct HolderData: Codable {
         var date: String?
         var holders: Int?
@@ -53,6 +59,7 @@ struct Stock: Identifiable, Codable {
         case holders_trend, change_5y, price_percentile, chip_concentration
         case macd_divergence, trend_analysis, price_position, kline
         case kline_daily, kline_weekly, kline_monthly
+        case net_profit_yoy, net_profit_qoq, roe, sector
     }
 
     init(from decoder: Decoder) throws {
@@ -76,6 +83,12 @@ struct Stock: Identifiable, Codable {
         kline_daily = try container.decodeIfPresent([KlineData].self, forKey: .kline_daily)
         kline_weekly = try container.decodeIfPresent([KlineData].self, forKey: .kline_weekly)
         kline_monthly = try container.decodeIfPresent([KlineData].self, forKey: .kline_monthly)
+
+        // 财务数据
+        net_profit_yoy = try container.decodeIfPresent(String.self, forKey: .net_profit_yoy)
+        net_profit_qoq = try container.decodeIfPresent(String.self, forKey: .net_profit_qoq)
+        roe = try container.decodeIfPresent(String.self, forKey: .roe)
+        sector = try container.decodeIfPresent(String.self, forKey: .sector)
     }
 
     private static func decodeNumeric(container: KeyedDecodingContainer<Stock.CodingKeys>, key: CodingKeys) throws -> Double? {

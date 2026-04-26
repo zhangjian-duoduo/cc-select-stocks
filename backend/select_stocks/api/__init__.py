@@ -37,7 +37,8 @@ def get_stocks():
         cursor.execute("""
             SELECT s.code, s.name, s.price, s.change_pct, s.selected_at,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
-                   a.macd_divergence, a.trend_analysis, a.price_position
+                   a.macd_divergence, a.trend_analysis, a.price_position,
+                   a.net_profit_yoy, a.net_profit_qoq, a.roe
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
             ORDER BY s.selected_at DESC
@@ -431,6 +432,7 @@ def get_stock_detail(stock_code):
             result['price_percentile'] = analysis.get('price_percentile', 50)
             result['chip_concentration'] = analysis.get('chip_concentration', 0.5)
             result['macd_divergence'] = analysis.get('macd_divergence', '{}')
+            result['sector'] = analysis.get('sector', '')  # 所属行业板块
 
         # 支持日/周/月K线 - 返回所有数据
         periods = ['daily', 'weekly', 'monthly']
@@ -841,9 +843,10 @@ def kline_load():
 @app.route('/api/v1/update_prices', methods=['POST'])
 def update_prices():
     """更新实时价格 - iOS app打开时调用
-    由于实时行情API限制，价格更新暂不可用
-    返回现有数据，标记成功
+    使用腾讯免费接口获取实时行情
     """
+    import urllib.request
+    import ssl
     conn = None
     cursor = None
 
@@ -858,13 +861,60 @@ def update_prices():
         if not stocks:
             return jsonify({'code': 0, 'message': '没有股票数据'})
 
-        # 实时价格获取需要付费API，这里暂时跳过
-        # 可以选择：1.使用现有数据 2.返回成功让前端刷新
+        # 构建腾讯API请求
+        codes = []
+        for s in stocks:
+            code = s['code']
+            if code.startswith('6'):
+                codes.append(f'sh{code}')
+            else:
+                codes.append(f'sz{code}')
+
+        # 批量获取实时价格 (最多200只)
+        url = f'http://qt.gtimg.cn/q={",".join(codes[:200])}'
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req, timeout=10, context=context)
+        data = response.read().decode('gb2312', errors='ignore')
+
+        # 解析数据
+        updated = 0
+        for item in data.split(';'):
+            if not item.strip():
+                continue
+            try:
+                parts = item.split('=')
+                if len(parts) < 2:
+                    continue
+                full_code = parts[0].split('_')[-1]
+                # 提取股票代码
+                if full_code.startswith('sh'):
+                    stock_code = full_code[2:]
+                elif full_code.startswith('sz'):
+                    stock_code = full_code[2:]
+                else:
+                    continue
+
+                # 解析价格数据
+                fields = parts[1].split('~')
+                if len(fields) > 32:
+                    current_price = float(fields[3]) if fields[3] else 0
+                    change_pct = float(fields[32]) if fields[32] else 0  # 涨跌幅在第32位
+
+                    if current_price > 0:
+                        cursor.execute("""
+                            UPDATE stocks SET price = %s, change_pct = %s WHERE code = %s
+                        """, (current_price, change_pct, stock_code))
+                        updated += 1
+            except Exception:
+                continue
+
+        conn.commit()
 
         return jsonify({
             'code': 0,
-            'message': f'共 {len(stocks)} 只股票，价格将在下午4点分析更新时同步',
-            'count': len(stocks)
+            'message': f'更新成功 {updated} 只股票',
+            'count': updated
         })
 
     except Exception as e:
