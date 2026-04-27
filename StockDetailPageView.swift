@@ -8,8 +8,10 @@ struct StockDetailPageView: View {
 
     @State private var selectedQuarterIndex: Int? = nil
     @State private var detailedStocks: [String: Stock] = [:]
+    @State private var financialHistoryStocks: [String: [Stock.FinancialHistoryItem]] = [:]
     @State private var selectedKlinePeriod: KlinePeriod = .daily
     @State private var selectedKlineIndex: Int? = nil
+    @State private var selectedFinancialIndex: Int? = nil
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
 
@@ -25,9 +27,11 @@ struct StockDetailPageView: View {
                 StockDetailContent(
                     stock: stock,
                     detailedStock: detailedStocks[stock.code],
+                    financialHistory: financialHistoryStocks[stock.code],
                     selectedQuarterIndex: $selectedQuarterIndex,
                     selectedKlinePeriod: $selectedKlinePeriod,
                     selectedKlineIndex: $selectedKlineIndex,
+                    selectedFinancialIndex: $selectedFinancialIndex,
                     loadDetail: { loadStockDetail(stockCode: stock.code) }
                 )
                 .tag(index)
@@ -49,6 +53,9 @@ struct StockDetailPageView: View {
             if detailedStocks[code] == nil {
                 loadStockDetail(stockCode: code)
             }
+            if financialHistoryStocks[code] == nil {
+                loadFinancialHistory(stockCode: code)
+            }
         }
     }
 
@@ -69,14 +76,46 @@ struct StockDetailPageView: View {
             }
         }
     }
+
+    private func loadFinancialHistory(stockCode: String) {
+        Task {
+            guard let url = URL(string: "\(baseURL)/stock/\(stockCode)/financial_history") else { return }
+            do {
+                let (data, response) = try await URLSession.shared.data(from: url)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                       let responseData = json["data"] as? [String: Any],
+                       let history = responseData["history"] as? [[String: Any]] {
+                        let items = history.compactMap { dict -> Stock.FinancialHistoryItem? in
+                            var item = Stock.FinancialHistoryItem()
+                            item.report_date = dict["report_date"] as? String
+                            item.report_name = dict["report_name"] as? String
+                            item.quarter = dict["quarter"] as? String
+                            item.net_profit_yoy = dict["net_profit_yoy"] as? String
+                            item.net_profit_qoq = dict["net_profit_qoq"] as? String
+                            item.revenue_yoy = dict["revenue_yoy"] as? String
+                            return item
+                        }
+                        await MainActor.run {
+                            financialHistoryStocks[stockCode] = items
+                        }
+                    }
+                }
+            } catch {
+                print("加载财务历史失败: \(error)")
+            }
+        }
+    }
 }
 
 struct StockDetailContent: View {
     let stock: Stock
     let detailedStock: Stock?
+    let financialHistory: [Stock.FinancialHistoryItem]?
     @Binding var selectedQuarterIndex: Int?
     @Binding var selectedKlinePeriod: StockDetailPageView.KlinePeriod
     @Binding var selectedKlineIndex: Int?
+    @Binding var selectedFinancialIndex: Int?
     let loadDetail: () -> Void
 
     @State private var isLoading = false
@@ -113,6 +152,11 @@ struct StockDetailContent: View {
                    股东趋势图(holders: holders)
                 }
 
+                // 财务数据趋势
+                if let history = financialHistory, !history.isEmpty {
+                    财务趋势图(history: history)
+                }
+
                 // K线趋势图
                 if isLoading {
                     VStack {
@@ -143,6 +187,9 @@ struct StockDetailContent: View {
                 if let chip = stock.chip_concentration {
                     筹码集中度View(chip: chip)
                 }
+
+                // 退市风险分析
+                退市风险分析View(stock: stock)
             }
             .padding()
         }
@@ -151,6 +198,7 @@ struct StockDetailContent: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             loadDetail()
+            loadFinancialHistory(stockCode: stock.code)
         }
     }
 
@@ -311,6 +359,222 @@ struct StockDetailContent: View {
                         .font(.title3)
                         .fontWeight(.semibold)
                         .foregroundColor(change >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                }
+            }
+        }
+        .padding()
+        .background(Color(hex: "1E1E1E"))
+        .cornerRadius(12)
+    }
+
+    // 财务数据趋势图
+    @ViewBuilder
+    func 财务趋势图(history: [Stock.FinancialHistoryItem]) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("净利润趋势")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            // 解析数据 - 按时间排序
+            let sortedHistory = history.sorted { ($0.report_date ?? "") < ($1.report_date ?? "") }
+
+            // 同比数据
+            let yoyData = sortedHistory.compactMap { item -> (String, Double)? in
+                guard let yoy = item.net_profit_yoy, !yoy.isEmpty else { return nil }
+                let label = item.quarter ?? item.report_name ?? ""
+                let value = Double(yoy.replacingOccurrences(of: "%", with: "")) ?? 0
+                return (label, value)
+            }
+
+            // 环比数据
+            let qoqData = sortedHistory.compactMap { item -> (String, Double)? in
+                guard let qoq = item.net_profit_qoq, !qoq.isEmpty else { return nil }
+                let label = item.quarter ?? item.report_name ?? ""
+                let value = Double(qoq.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")) ?? 0
+                return (label, value)
+            }
+
+            if yoyData.isEmpty {
+                Text("暂无数据")
+                    .font(.caption)
+                    .foregroundColor(.gray)
+            } else {
+                // 获取所有季度标签
+                let allLabels = yoyData.map { $0.0 }
+
+                // 同比趋势图
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Circle()
+                            .fill(Color(hex: "4CAF50"))
+                            .frame(width: 8, height: 8)
+                        Text("同比 (YoY)")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                    }
+
+                    Chart {
+                        ForEach(yoyData.indices, id: \.self) { index in
+                            let item = yoyData[index]
+                            LineMark(
+                                x: .value("季度", item.0),
+                                y: .value("同比", item.1)
+                            )
+                            .foregroundStyle(Color(hex: "4CAF50"))
+
+                            PointMark(
+                                x: .value("季度", item.0),
+                                y: .value("同比", item.1)
+                            )
+                            .foregroundStyle(Color(hex: "4CAF50"))
+                        }
+                    }
+                    .frame(height: 140)
+                    .chartXAxis {
+                        AxisMarks(values: .automatic) { _ in
+                            AxisValueLabel()
+                                .font(.caption2)
+                                .foregroundStyle(Color.gray)
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) { _ in
+                            AxisValueLabel()
+                                .foregroundStyle(Color.gray)
+                        }
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            let plotArea = geometry[proxy.plotAreaFrame]
+                            let cWidth = plotArea.width
+                            let xOff = plotArea.origin.x
+
+                            Rectangle()
+                                .fill(Color.clear)
+                                .contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            let xPos = value.location.x
+                                            if allLabels.count > 0 {
+                                                let idx = Int(((xPos - xOff) / cWidth) * CGFloat(allLabels.count))
+                                                selectedFinancialIndex = max(0, min(idx, allLabels.count - 1))
+                                            }
+                                        }
+                                )
+
+                            // 十字线
+                            if let idx = selectedFinancialIndex, idx < allLabels.count {
+                                let xPos = xOff + (CGFloat(idx) + 0.5) / CGFloat(allLabels.count) * cWidth
+                                Path { path in
+                                    path.move(to: CGPoint(x: xPos, y: plotArea.origin.y))
+                                    path.addLine(to: CGPoint(x: xPos, y: plotArea.origin.y + plotArea.height))
+                                }
+                                .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                .foregroundColor(Color.white.opacity(0.7))
+                            }
+                        }
+                    }
+
+                    // 同比数值
+                    if let idx = selectedFinancialIndex, idx < yoyData.count {
+                        let item = yoyData[idx]
+                        Text("\(item.0): \(String(format: "%.1f%%", item.1))")
+                            .font(.caption)
+                            .foregroundColor(Color(hex: "4CAF50"))
+                    }
+                }
+                .padding()
+                .background(Color(hex: "1E1E1E"))
+                .cornerRadius(8)
+
+                // 环比趋势图
+                if !qoqData.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Circle()
+                                .fill(Color(hex: "FFEB3B"))
+                                .frame(width: 8, height: 8)
+                            Text("环比 (QoQ)")
+                                .font(.subheadline)
+                                .foregroundColor(.gray)
+                        }
+
+                        let qoqLabels = qoqData.map { $0.0 }
+
+                        Chart {
+                            ForEach(qoqData.indices, id: \.self) { index in
+                                let item = qoqData[index]
+                                LineMark(
+                                    x: .value("季度", item.0),
+                                    y: .value("环比", item.1)
+                                )
+                                .foregroundStyle(Color(hex: "FFEB3B"))
+
+                                PointMark(
+                                    x: .value("季度", item.0),
+                                    y: .value("环比", item.1)
+                                )
+                                .foregroundStyle(Color(hex: "FFEB3B"))
+                            }
+                        }
+                        .frame(height: 140)
+                        .chartXAxis {
+                            AxisMarks(values: .automatic) { _ in
+                                AxisValueLabel()
+                                    .font(.caption2)
+                                    .foregroundStyle(Color.gray)
+                            }
+                        }
+                        .chartYAxis {
+                            AxisMarks(position: .leading) { _ in
+                                AxisValueLabel()
+                                    .foregroundStyle(Color.gray)
+                            }
+                        }
+                        .chartOverlay { proxy in
+                            GeometryReader { geometry in
+                                let plotArea = geometry[proxy.plotAreaFrame]
+                                let cWidth = plotArea.width
+                                let xOff = plotArea.origin.x
+
+                                Rectangle()
+                                    .fill(Color.clear)
+                                    .contentShape(Rectangle())
+                                    .gesture(
+                                        DragGesture(minimumDistance: 0)
+                                            .onChanged { value in
+                                                let xPos = value.location.x
+                                                if qoqLabels.count > 0 {
+                                                    let idx = Int(((xPos - xOff) / cWidth) * CGFloat(qoqLabels.count))
+                                                    selectedFinancialIndex = max(0, min(idx, qoqLabels.count - 1))
+                                                }
+                                            }
+                                    )
+
+                                if let idx = selectedFinancialIndex, idx < qoqLabels.count {
+                                    let xPos = xOff + (CGFloat(idx) + 0.5) / CGFloat(qoqLabels.count) * cWidth
+                                    Path { path in
+                                        path.move(to: CGPoint(x: xPos, y: plotArea.origin.y))
+                                        path.addLine(to: CGPoint(x: xPos, y: plotArea.origin.y + plotArea.height))
+                                    }
+                                    .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                                    .foregroundColor(Color.white.opacity(0.7))
+                                }
+                            }
+                        }
+
+                        // 环比数值
+                        if let idx = selectedFinancialIndex, idx < qoqData.count {
+                            let item = qoqData[idx]
+                            Text("\(item.0): \(String(format: "%.1f%%", item.1))")
+                                .font(.caption)
+                                .foregroundColor(Color(hex: "FFEB3B"))
+                        }
+                    }
+                    .padding()
+                    .background(Color(hex: "1E1E1E"))
+                    .cornerRadius(8)
                 }
             }
         }
@@ -684,6 +948,190 @@ struct StockDetailContent: View {
             return String(format: "%.2f万", volume / 10000)
         } else {
             return String(format: "%.0f", volume)
+        }
+    }
+}
+
+// 退市风险分析视图
+struct 退市风险分析View: View {
+    let stock: Stock
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // 标题
+            HStack {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(Color(hex: "FFEB3B"))
+                Text("退市风险分析")
+                    .font(.headline)
+                    .foregroundColor(.white)
+            }
+
+            // 风险规则列表
+            VStack(spacing: 8) {
+                ForEach(analyzeRisks(), id: \.rule) { item in
+                    HStack {
+                        // 规则名称
+                        Text(item.rule)
+                            .font(.subheadline)
+                            .foregroundColor(.white)
+
+                        Spacer()
+
+                        // 状态标签
+                        Text(item.status)
+                            .font(.caption)
+                            .fontWeight(.bold)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(backgroundColor(for: item.status))
+                            .cornerRadius(4)
+
+                        // 详情
+                        Text(item.detail)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                            .frame(width: 100, alignment: .trailing)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding()
+        .background(Color(hex: "1E1E1E"))
+        .cornerRadius(12)
+    }
+
+    private func analyzeRisks() -> [(rule: String, status: String, detail: String)] {
+        var results: [(rule: String, status: String, detail: String)] = []
+        let code = stock.code
+        let isMainBoard = code.hasPrefix("60") || code.hasPrefix("00")
+        let isGEM = code.hasPrefix("30")
+        let isSTAR = code.hasPrefix("68")
+
+        // ===== 财务类规则 =====
+
+        // 1. 净利润+营收组合指标（各板块不同门槛）
+        // 主板: 净利润为负+营收<3亿
+        // 创业板: 净利润为负+营收<1亿
+        // 科创板: 净利润为负+营收<5000万
+        let revenueThreshold = isSTAR ? "5000万" : (isGEM ? "1亿" : "3亿")
+        let isProfitNegative = checkProfitNegative()
+        let isRevenueLow = checkRevenueLow(isGEM: isGEM, isSTAR: isSTAR)
+
+        if isProfitNegative && isRevenueLow {
+            results.append(("净利润+营收(\(revenueThreshold))", "危险", "净利润为负+营收低于门槛"))
+        } else if isProfitNegative {
+            results.append(("净利润+营收(\(revenueThreshold))", "警示", "净利润为负，需结合营收"))
+        } else if let yoy = stock.net_profit_yoy, let yoyVal = Double(yoy), yoyVal >= 0 {
+            results.append(("净利润+营收(\(revenueThreshold))", "安全", "净利同比增长\(Int(yoyVal))%"))
+        } else if let revenue = stock.revenue {
+            results.append(("净利润+营收(\(revenueThreshold))", "安全", "营收\(revenue)"))
+        } else {
+            results.append(("净利润+营收(\(revenueThreshold))", "未知", "需营收数据"))
+        }
+
+        // 2. ROE
+        if let roe = stock.roe, let roeVal = Double(roe), roeVal < 0 {
+            results.append(("ROE", "警示", "ROE为\(roe)%"))
+        } else if let roe = stock.roe, let roeVal = Double(roe), roeVal >= 0 {
+            results.append(("ROE", "安全", "ROE为\(roe)%"))
+        } else {
+            results.append(("ROE", "未知", "缺少数据"))
+        }
+
+        // 3. 净资产为负（使用每股净资产判断）
+        if let bv = stock.book_value_per_share, let bvVal = Double(bv), bvVal < 0 {
+            results.append(("净资产为负", "危险", "每股净资产\(bv)元"))
+        } else if let bv = stock.book_value_per_share {
+            results.append(("净资产为负", "安全", "每股净资产\(bv)元"))
+        } else {
+            results.append(("净资产为负", "未知", "需每股净资产"))
+        }
+
+        // 4. 审计报告
+        results.append(("审计报告非标", "未知", "需审计数据"))
+
+        // 5. 分红不达标
+        results.append(("分红不达标", "未知", "需分红数据"))
+
+        // ===== 交易类规则 =====
+
+        // 6. 股价<1元
+        if let price = stock.price, price < 1.0 {
+            results.append(("股价<1元", "危险", "连续20日退市"))
+        } else if let price = stock.price, price < 2.0 {
+            results.append(("股价<1元", "警示", "接近红线"))
+        } else if let price = stock.price {
+            results.append(("股价<1元", "安全", "股价\(String(format: "%.2f", price))"))
+        } else {
+            results.append(("股价<1元", "未知", "需股价数据"))
+        }
+
+        // 7. 市值退市
+        results.append(("市值<5亿", "未知", "需市值数据"))
+
+        // ===== 规范类规则 =====
+
+        results.append(("资金占用", "未知", "需资金数据"))
+        results.append(("内控失效", "未知", "需内控数据"))
+
+        // ===== 重大违法类 =====
+
+        results.append(("财务造假", "未知", "需调查"))
+
+        return results
+    }
+
+    // 检查净利润是否为负
+    private func checkProfitNegative() -> Bool {
+        if let yoy = stock.net_profit_yoy, let yoyVal = Double(yoy) {
+            return yoyVal < 0
+        }
+        return false
+    }
+
+    // 检查营收是否低于门槛
+    private func checkRevenueLow(isGEM: Bool, isSTAR: Bool) -> Bool {
+        guard let revenue = stock.revenue else { return false }
+
+        // revenue格式可能是 "123.45亿" 或 "1234.56万"
+        let numStr = revenue.replacingOccurrences(of: "亿", with: "").replacingOccurrences(of: "万", with: "").replacingOccurrences(of: "元", with: "")
+        guard let num = Double(numStr) else { return false }
+
+        var revenueInYuan: Double = num
+        if revenue.contains("万") {
+            revenueInYuan = num * 10000
+        } else if revenue.contains("亿") {
+            revenueInYuan = num * 100000000
+        }
+
+        // 判断是否低于门槛
+        let threshold: Double
+        if isSTAR {
+            threshold = 50000000  // 5000万
+        } else if isGEM {
+            threshold = 100000000  // 1亿
+        } else {
+            threshold = 300000000  // 3亿
+        }
+
+        return revenueInYuan < threshold
+    }
+
+    private func backgroundColor(for status: String) -> Color {
+        switch status {
+        case "安全":
+            return Color(hex: "4CAF50")
+        case "警示":
+            return Color(hex: "FFEB3B")
+        case "危险":
+            return Color(hex: "F44336")
+        case "未知":
+            return Color(hex: "757575")
+        default:
+            return Color.gray
         }
     }
 }
