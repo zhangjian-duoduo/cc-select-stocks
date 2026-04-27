@@ -32,7 +32,7 @@ struct StockDetailPageView: View {
                     selectedKlinePeriod: $selectedKlinePeriod,
                     selectedKlineIndex: $selectedKlineIndex,
                     selectedFinancialIndex: $selectedFinancialIndex,
-                    loadDetail: loadStockDetail,
+                    loadDetail: { loadStockDetail(stock.code) },
                     loadFinancialHistory: loadFinancialHistory
                 )
                 .tag(index)
