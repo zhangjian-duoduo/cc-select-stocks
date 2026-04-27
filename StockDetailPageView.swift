@@ -32,7 +32,8 @@ struct StockDetailPageView: View {
                     selectedKlinePeriod: $selectedKlinePeriod,
                     selectedKlineIndex: $selectedKlineIndex,
                     selectedFinancialIndex: $selectedFinancialIndex,
-                    loadDetail: { loadStockDetail(stockCode: stock.code) }
+                    loadDetail: loadStockDetail,
+                    loadFinancialHistory: loadFinancialHistory
                 )
                 .tag(index)
             }
@@ -51,15 +52,15 @@ struct StockDetailPageView: View {
         for i in range {
             let code = allStocks[i].code
             if detailedStocks[code] == nil {
-                loadStockDetail(stockCode: code)
+                loadStockDetail(code)
             }
             if financialHistoryStocks[code] == nil {
-                loadFinancialHistory(stockCode: code)
+                loadFinancialHistory(code)
             }
         }
     }
 
-    private func loadStockDetail(stockCode: String) {
+    private func loadStockDetail(_ stockCode: String) {
         Task {
             guard let url = URL(string: "\(baseURL)/stock/\(stockCode)") else { return }
             do {
@@ -77,7 +78,7 @@ struct StockDetailPageView: View {
         }
     }
 
-    private func loadFinancialHistory(stockCode: String) {
+    private func loadFinancialHistory(_ stockCode: String) {
         Task {
             guard let url = URL(string: "\(baseURL)/stock/\(stockCode)/financial_history") else { return }
             do {
@@ -117,6 +118,7 @@ struct StockDetailContent: View {
     @Binding var selectedKlineIndex: Int?
     @Binding var selectedFinancialIndex: Int?
     let loadDetail: () -> Void
+    let loadFinancialHistory: (String) -> Void
 
     @State private var isLoading = false
 
@@ -198,7 +200,7 @@ struct StockDetailContent: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             loadDetail()
-            loadFinancialHistory(stockCode: stock.code)
+            loadFinancialHistory(stock.code)
         }
     }
 
