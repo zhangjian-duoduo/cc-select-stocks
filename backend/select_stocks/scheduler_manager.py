@@ -66,7 +66,7 @@ def update_daily_kline():
 
         def update_one(code):
             try:
-                time.sleep(0.15)  # 缩短间隔
+                time.sleep(0.1)  # 缩短间隔，避免被API限流
                 df = fetch_kline_data(code, 'daily')
                 if df is not None and not df.empty:
                     latest = df.tail(1)
@@ -79,8 +79,8 @@ def update_daily_kline():
             except Exception as e:
                 return False
 
-        # 并行处理 - 10个线程
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # 并行处理 - 15个线程
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
             list(executor.map(update_one, stocks))
 
         print(f"[定时任务] 日K线更新完成，共更新 {updated[0]} 只")
@@ -119,8 +119,8 @@ def update_weekly_kline():
             except Exception as e:
                 return False
 
-        # 并行处理 - 10个线程
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        # 并行处理 - 15个线程
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
             list(executor.map(update_one, stocks))
 
         print(f"[定时任务] 周K线更新完成，共更新 {updated[0]} 只")
@@ -165,6 +165,7 @@ def run_stock_selection():
     sys.path.insert(0, '/root/select_stocks')
     from stock_selector import StockSelector
     from data_fetcher import DataFetcher
+    from datetime import datetime
 
     df = DataFetcher()
     selector = StockSelector(df)
@@ -181,29 +182,74 @@ def run_stock_selection():
     cursor = conn.cursor()
 
     try:
+        # 获取上一个有数据的日期（从stock_history表读取）
+        cursor.execute("""
+            SELECT DATE_FORMAT(selected_at, '%%Y-%%m-%%d') as dt
+            FROM stock_history
+            GROUP BY DATE_FORMAT(selected_at, '%%Y-%%m-%%d')
+            ORDER BY MAX(selected_at) DESC
+            LIMIT 1
+        """)
+        prev_row = cursor.fetchone()
+        prev_date = prev_row['dt'] if prev_row else None
+
+        yesterday_stocks = {}
+        if prev_date:
+            cursor.execute("SELECT code, name FROM stock_history WHERE selected_at = %s", (prev_date,))
+            yesterday_stocks = {row[0]: {'name': row[1]} for row in cursor.fetchall()}
+
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # 保存被剔除的股票
+        for code, info in yesterday_stocks.items():
+            if code not in [s['code'] for s in selected_stocks]:
+                cursor.execute("""
+                    INSERT INTO stock_removed (code, name, removed_at)
+                    VALUES (%s, %s, %s)
+                """, (code, info.get('name', ''), today))
+
+        # 保存今日选股结果到历史
+        for stock in selected_stocks:
+            sector = stock.get('sector', '') or ''
+            cursor.execute("""
+                INSERT INTO stock_history (code, name, selected_at)
+                VALUES (%s, %s, %s)
+            """, (stock['code'], stock['name'], today))
+
         # 清空旧数据
         cursor.execute("TRUNCATE TABLE stocks")
         cursor.execute("TRUNCATE TABLE stock_analysis")
 
         # 插入新数据
         for stock in selected_stocks:
+            # 获取行业板块信息
+            sector = stock.get('sector', '') or ''
             cursor.execute("""
-                INSERT INTO stocks (code, name, price, change_pct, selected_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (stock['code'], stock['name'], stock['price'], stock['change_pct'], stock['selected_at']))
+                INSERT INTO stocks (code, name, price, change_pct, selected_at, sector)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (stock['code'], stock['name'], stock['price'], stock['change_pct'], stock['selected_at'], sector))
 
         conn.commit()
         print(f"[定时任务] 选股完成，共选出 {len(selected_stocks)} 只股票")
+        print(f"[定时任务] 记录剔除股票 {len(yesterday_stocks) - len(set(yesterday_stocks.keys()) & set([s['code'] for s in selected_stocks]))} 只")
+        print(f"[定时任务] 保存历史记录 {len(selected_stocks)} 只")
     finally:
         cursor.close()
         conn.close()
 
-def update_analysis():
-    """更新分析数据"""
+def should_update_financial_data():
+    """每天都需要更新财务数据"""
+    return True
+
+def update_analysis(update_financial=False):
+    """更新分析数据 - 优化版：优先从本地数据库读取财务数据"""
     print("[定时任务] 开始更新分析数据...")
     import sys
     sys.path.insert(0, '/root/select_stocks')
     import json
+    import concurrent.futures
+    import time
+    from datetime import datetime
     from analyzer import TechnicalAnalyzer
     from data_fetcher import DataFetcher
 
@@ -216,34 +262,115 @@ def update_analysis():
     try:
         cursor.execute("SELECT code FROM stocks")
         stocks = cursor.fetchall()
+        stock_codes = [s['code'] for s in stocks]
+        print(f"[定时任务] 共 {len(stock_codes)} 只股票需要更新")
 
+        # 步骤1: 从本地数据库读取财务数据（net_profit_yoy, net_profit_qoq）
+        print("[定时任务] 从本地数据库读取财务数据...")
+        financial_data_cache = {}
+
+        # 批量获取所有股票的财务数据
+        cursor.execute("""
+            SELECT code, report_date, report_name, net_profit_yoy, net_profit_qoq
+            FROM stock_financial_history
+            WHERE (code, report_date) IN (
+                SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
+            )
+        """)
+        for row in cursor.fetchall():
+            financial_data_cache[row['code']] = {
+                'net_profit_yoy': row['net_profit_yoy'] or '',
+                'net_profit_qoq': row['net_profit_qoq'] or '',
+                'roe': '',  # ROE需要从其他地方获取
+                'revenue': '',
+                'book_value_per_share': ''
+            }
+
+        print(f"[定时任务] 从本地读取了 {len(financial_data_cache)} 只股票的财务数据")
+
+        # 步骤2: 获取已有的ROE数据作为回退
+        print("[定时任务] 获取已有的ROE数据...")
+        cursor.execute("SELECT code, roe, revenue, book_value_per_share FROM stock_analysis")
+        existing_data = {}
+        for row in cursor.fetchall():
+            existing_data[row['code']] = {
+                'roe': row['roe'] or '',
+                'revenue': row['revenue'] or '',
+                'book_value_per_share': row['book_value_per_share'] or ''
+            }
+
+        # 合并数据：使用本地财务数据 + 已有ROE
+        for code in stock_codes:
+            # 确保缓存中有这条记录
+            if code not in financial_data_cache:
+                financial_data_cache[code] = {
+                    'net_profit_yoy': '',
+                    'net_profit_qoq': '',
+                    'roe': '',
+                    'revenue': '',
+                    'book_value_per_share': ''
+                }
+            if code in existing_data:
+                if not financial_data_cache[code].get('roe'):
+                    financial_data_cache[code]['roe'] = existing_data[code].get('roe', '')
+                if not financial_data_cache[code].get('revenue'):
+                    financial_data_cache[code]['revenue'] = existing_data[code].get('revenue', '')
+                if not financial_data_cache[code].get('book_value_per_share'):
+                    financial_data_cache[code]['book_value_per_share'] = existing_data[code].get('book_value_per_share', '')
+
+        print("[定时任务] 财务数据准备完成，开始更新数据库...")
+
+        # 转换numpy类型为Python原生类型
+        import numpy as np
+        def convert_numpy(val, default=None):
+            if val is None:
+                return default
+            if isinstance(val, (np.floating, np.integer)):
+                return float(val)
+            if isinstance(val, np.bool_):
+                return bool(val)
+            return val
+
+        # 串行更新数据库（保持稳定性）
         updated = 0
-        for stock in stocks:
-            code = stock['code']
+        for code in stock_codes:
             try:
                 analysis = analyzer.analyze_stock(code)
+                financial_data = financial_data_cache.get(code, {})
+
+                # 先删除旧数据
+                cursor.execute("DELETE FROM stock_analysis WHERE code=%s", (code,))
+
+                # 转换numpy类型
+                change_5y = convert_numpy(analysis.get('change_5y'), 0)
+                price_percentile = convert_numpy(analysis.get('price_percentile'), 50)
+                chip_concentration = convert_numpy(analysis.get('chip_concentration'), 0.5)
+                price_position = convert_numpy(analysis.get('price_position'), 0.5)
 
                 cursor.execute("""
                     INSERT INTO stock_analysis
-                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position, net_profit_yoy, net_profit_qoq, roe, sector)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position, net_profit_yoy, net_profit_qoq, revenue, book_value_per_share, roe, sector, financial_updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 """, (
                     code,
                     json.dumps(analysis.get('holders_trend', [])),
-                    analysis.get('change_5y', 0),
-                    analysis.get('price_percentile', 50),
-                    analysis.get('chip_concentration', 0.5),
+                    change_5y,
+                    price_percentile,
+                    chip_concentration,
                     json.dumps(analysis.get('macd_divergence', {})),
                     json.dumps(analysis.get('trend_analysis', {})),
-                    analysis.get('price_position', 0.5),
-                    analysis.get('net_profit_yoy', ''),
-                    analysis.get('net_profit_qoq', ''),
-                    analysis.get('roe', ''),
+                    price_position,
+                    financial_data.get('net_profit_yoy', ''),
+                    financial_data.get('net_profit_qoq', ''),
+                    financial_data.get('revenue', ''),
+                    financial_data.get('book_value_per_share', ''),
+                    financial_data.get('roe', ''),
                     analysis.get('sector', '')
                 ))
                 updated += 1
 
-                if updated % 10 == 0:
+                if updated % 100 == 0:
+                    conn.commit()
                     print(f"[定时任务] 已更新 {updated} 只股票")
             except Exception as e:
                 print(f"[定时任务] {code} 分析失败: {e}")
@@ -255,6 +382,202 @@ def update_analysis():
         cursor.close()
         conn.close()
 
+def get_financial_data_fast(code):
+    """获取财务数据（使用单季度数据API）"""
+    import akshare as ak
+    import pandas as pd
+
+    result = {
+        'net_profit_yoy': '',
+        'net_profit_qoq': '',
+        'revenue': '',
+        'book_value_per_share': '',
+        'roe': ''
+    }
+
+    try:
+        # 使用新的API获取单季度数据
+        df = ak.stock_financial_abstract_new_ths(symbol=code)
+        if df is None or len(df) == 0:
+            # 备用方案
+            return get_financial_data_old(code)
+
+        # 获取净利润数据
+        net_profit_df = df[df['metric_name'] == 'parent_holder_net_profit']
+        if len(net_profit_df) == 0:
+            return get_financial_data_old(code)
+
+        # 按报告期排序，取最新
+        net_profit_df = net_profit_df.sort_values('report_date', ascending=False)
+
+        # 最新报告
+        latest = net_profit_df.iloc[0]
+        latest_report_name = latest['report_name']
+
+        # yoy和mom已经是小数形式（如-1.064表示-106.4%）
+        if pd.notna(latest['single_yoy']):
+            yoy_val = float(latest['single_yoy']) * 100
+            result['net_profit_yoy'] = f"{yoy_val:.2f}"
+
+        # 环比(mom)
+        if pd.notna(latest['mom']):
+            mom_val = float(latest['mom']) * 100
+            result['net_profit_qoq'] = f"{mom_val:.1f}%"
+
+        # 获取营业收入（单位是元，需要转换）
+        revenue_df = df[df['metric_name'] == 'operating_income_total']
+        if len(revenue_df) > 0:
+            revenue_df = revenue_df.sort_values('report_date', ascending=False)
+            latest_revenue = revenue_df.iloc[0]
+            if pd.notna(latest_revenue['single']):
+                revenue_single = float(latest_revenue['single'])
+                # 转换为亿元
+                if revenue_single >= 100000000:
+                    result['revenue'] = f"{revenue_single/100000000:.2f}亿"
+                elif revenue_single >= 10000:
+                    result['revenue'] = f"{revenue_single/10000:.2f}万"
+
+        # 获取每股净资产（单位是元）
+        bv_df = df[df['metric_name'] == 'calc_per_net_assets']
+        if len(bv_df) > 0:
+            bv_df = bv_df.sort_values('report_date', ascending=False)
+            bv = bv_df.iloc[0]
+            if pd.notna(bv['value']):
+                result['book_value_per_share'] = str(round(float(bv['value']), 2))
+
+        # 获取ROE（已经是百分比形式）
+        roe_df = df[df['metric_name'] == 'index_full_diluted_roe']
+        if len(roe_df) > 0:
+            roe_df = roe_df.sort_values('report_date', ascending=False)
+            roe = roe_df.iloc[0]
+            if pd.notna(roe['value']):
+                result['roe'] = str(round(float(roe['value']), 2))
+
+        return result
+
+    except Exception as e:
+        print(f"[财务数据] {code} 获取失败: {e}")
+        return get_financial_data_old(code)
+
+
+def get_financial_data_old(code):
+    """备用：使用旧的API获取财务数据"""
+    import akshare as ak
+    import pandas as pd
+
+    result = {
+        'net_profit_yoy': '',
+        'net_profit_qoq': '',
+        'revenue': '',
+        'book_value_per_share': '',
+        'roe': ''
+    }
+
+    def parse_money(val):
+        if val is None or val == False:
+            return 0
+        val = str(val)
+        num = float(val.replace('亿', '').replace('万', '').replace('元', '').replace(',', ''))
+        if '亿' in val:
+            num *= 10000
+        return num
+
+    try:
+        df = ak.stock_financial_abstract_ths(symbol=code)
+        if df is not None and len(df) > 0:
+            df['报告期'] = pd.to_datetime(df['报告期'], errors='coerce')
+            df = df.sort_values('报告期', ascending=False)
+
+            latest = df.iloc[0]
+            latest_period = str(latest.get('报告期', ''))
+
+            if '-12-31' in latest_period and len(df) > 1:
+                q3_mask = df['报告期'].astype(str).str.contains('-09-30')
+
+                if q3_mask.any():
+                    q3_row = df[q3_mask].iloc[0]
+
+                    annual_profit = parse_money(latest['净利润'])
+                    q3_profit = parse_money(q3_row['净利润'])
+                    q4_profit = annual_profit - q3_profit
+
+                    last_year_mask = df['报告期'].astype(str).str.contains('2024-12-31')
+                    last_year_q3_mask = df['报告期'].astype(str).str.contains('2024-09-30')
+
+                    if last_year_mask.any() and last_year_q3_mask.any():
+                        last_year_row = df[last_year_mask].iloc[0]
+                        last_year_q3_row = df[last_year_q3_mask].iloc[0]
+                        last_year_annual = parse_money(last_year_row['净利润'])
+                        last_year_q3 = parse_money(last_year_q3_row['净利润'])
+                        last_year_q4 = last_year_annual - last_year_q3
+                        if last_year_q4 != 0:
+                            yoy = (q4_profit - last_year_q4) / abs(last_year_q4) * 100
+                            result['net_profit_yoy'] = f"{yoy:.2f}"
+
+                    if q3_profit != 0:
+                        qoq = (q4_profit - q3_profit) / abs(q3_profit) * 100
+                        result['net_profit_qoq'] = f"{qoq:.1f}%"
+
+                    annual_revenue = parse_money(latest['营业总收入'])
+                    q3_revenue = parse_money(q3_row['营业总收入'])
+                    q4_revenue = annual_revenue - q3_revenue
+                    if q4_revenue > 0:
+                        result['revenue'] = f"{q4_revenue/10000:.2f}亿"
+
+                    bv = latest['每股净资产']
+                    if bv and bv != False:
+                        result['book_value_per_share'] = str(bv)
+
+                    roe_raw = latest['净资产收益率-摊薄']
+                    if roe_raw and roe_raw != False:
+                        result['roe'] = str(roe_raw).replace('%', '')
+                    return result
+
+            yoy_raw = latest.get('净利润同比增长率')
+            if yoy_raw is not None and yoy_raw != False:
+                result['net_profit_yoy'] = str(yoy_raw).replace('%', '')
+
+            revenue_raw = latest.get('营业总收入')
+            if revenue_raw is not None and revenue_raw != False:
+                result['revenue'] = str(revenue_raw)
+
+            bv_raw = latest.get('每股净资产')
+            if bv_raw is not None and bv_raw != False:
+                result['book_value_per_share'] = str(bv_raw)
+
+            roe_raw = latest.get('净资产收益率')
+            if roe_raw is not None and roe_raw != False:
+                result['roe'] = str(roe_raw).replace('%', '')
+            else:
+                roe_raw = latest.get('净资产收益率-摊薄')
+                if roe_raw is not None and roe_raw != False:
+                    result['roe'] = str(roe_raw).replace('%', '')
+
+            if len(df) > 1:
+                prev = df.iloc[1]
+                curr_net = latest['净利润']
+                prev_net = prev['净利润']
+                try:
+                    curr_val = parse_money(curr_net)
+                    prev_val = parse_money(prev_net)
+                    if prev_val != 0:
+                        qoq = (curr_val - prev_val) / abs(prev_val) * 100
+                        result['net_profit_qoq'] = f"{qoq:.1f}%"
+                except:
+                    pass
+
+    except Exception as e:
+        pass
+
+    return result
+
+
+def get_financial_data(code):
+    """获取财务数据（营业收入、每股净资产等）- 兼容旧接口"""
+    import time
+    time.sleep(0.2)  # 稍微等待
+    return get_financial_data_fast(code)
+
 def daily_task():
     """每日下午4点执行的任务"""
     print("=" * 50)
@@ -262,17 +585,170 @@ def daily_task():
     print("=" * 50)
 
     # 1. 更新日K线
-    update_daily_kline()
+    try:
+        update_daily_kline()
+    except Exception as e:
+        print(f"[每日任务] 日K线更新失败: {e}")
 
     # 2. 运行选股
-    run_stock_selection()
+    try:
+        run_stock_selection()
+    except Exception as e:
+        print(f"[每日任务] 选股失败: {e}")
 
-    # 3. 更新分析数据
-    update_analysis()
+    # 3. 增量更新所有A股财务数据（必须在分析之前执行，这样分析才能用到最新财务数据）
+    try:
+        update_all_financial_data()
+    except Exception as e:
+        print(f"[每日任务] 财务数据更新失败: {e}")
+
+    # 4. 更新分析数据
+    try:
+        update_analysis()
+    except Exception as e:
+        print(f"[每日任务] 分析数据更新失败: {e}")
 
     print("=" * 50)
     print("[每日任务] 执行完成!")
     print("=" * 50)
+
+
+def update_all_financial_data():
+    """更新所有A股财务数据（增量更新）"""
+    print("[定时任务] 开始更新财务数据...")
+    import sys
+    sys.path.insert(0, '/root/select_stocks')
+    import pymysql
+    import akshare as ak
+    import pandas as pd
+    import concurrent.futures
+    import time
+    import random
+
+    DB_CONFIG = {
+        'host': 'localhost',
+        'user': 'root',
+        'password': '',
+        'database': 'select_stocks',
+        'charset': 'utf8mb4'
+    }
+
+    def get_db():
+        return pymysql.connect(**DB_CONFIG)
+
+    def get_all_stock_codes():
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT code FROM stock_kline")
+        codes = [row[0] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
+        return codes
+
+    def fetch_latest_financial(code):
+        try:
+            time.sleep(random.uniform(0.05, 0.08))
+            df = ak.stock_financial_abstract_new_ths(symbol=code)
+            if df is None or len(df) == 0:
+                return None
+
+            net_profit_df = df[df['metric_name'] == 'parent_holder_net_profit'].copy()
+            if len(net_profit_df) == 0:
+                return None
+
+            net_profit_df = net_profit_df.sort_values('report_date', ascending=False)
+            row = net_profit_df.iloc[0]
+
+            report_date = row['report_date']
+            report_name = row.get('report_name', '')
+
+            yoy = row.get('single_yoy')
+            mom = row.get('mom')
+
+            yoy_str = f"{float(yoy) * 100:.2f}%" if pd.notna(yoy) else ''
+            mom_str = f"{float(mom) * 100:.1f}%" if pd.notna(mom) else ''
+
+            revenue_df = df[df['metric_name'] == 'operating_income_total']
+            revenue_yoy_str = ''
+            if len(revenue_df) > 0:
+                revenue_row = revenue_df[revenue_df['report_date'] == report_date]
+                if len(revenue_row) > 0:
+                    rev_yoy = revenue_row.iloc[0].get('single_yoy')
+                    if pd.notna(rev_yoy):
+                        revenue_yoy_str = f"{float(rev_yoy) * 100:.2f}%"
+
+            # 获取ROE
+            roe_str = ''
+            roe_df = df[df['metric_name'] == 'index_full_diluted_roe']
+            if len(roe_df) > 0:
+                roe_df = roe_df.sort_values('report_date', ascending=False)
+                roe = roe_df.iloc[0]
+                if pd.notna(roe.get('value')):
+                    roe_str = str(round(float(roe['value']), 2))
+
+            return {
+                'code': code,
+                'report_date': report_date,
+                'report_name': report_name,
+                'net_profit_yoy': yoy_str,
+                'net_profit_qoq': mom_str,
+                'revenue_yoy': revenue_yoy_str,
+                'roe': roe_str
+            }
+        except:
+            return None
+
+    def save_to_db(data):
+        if not data:
+            return False
+        from datetime import datetime
+        conn = get_db()
+        cursor = conn.cursor()
+        today = datetime.now().strftime('%Y-%m-%d')
+        try:
+            # 保存到财务历史表
+            cursor.execute("""
+                REPLACE INTO stock_financial_history
+                (code, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, roe, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            """, (data['code'], data['report_date'], data['report_name'],
+                  data['net_profit_yoy'], data['net_profit_qoq'], data['revenue_yoy'], data.get('roe', '')))
+
+            # 同时保存到每日财务更新表（供App财务更新页面使用）
+            cursor.execute("""
+                INSERT IGNORE INTO daily_financial_updates
+                (code, name, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, updated_date)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (data['code'], data.get('name', ''), data['report_date'], data['report_name'],
+                  data['net_profit_yoy'], data['net_profit_qoq'], data['revenue_yoy'], today))
+
+            conn.commit()
+            return True
+        except Exception as e:
+            print(f"保存失败: {e}")
+            conn.rollback()
+            return False
+        finally:
+            cursor.close()
+            conn.close()
+
+    def process_stock(code):
+        data = fetch_latest_financial(code)
+        if data:
+            return save_to_db(data)
+        return False
+
+    codes = get_all_stock_codes()
+    print(f"[定时任务] 共 {len(codes)} 只股票需要更新财务数据")
+
+    success = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        results = executor.map(process_stock, codes)
+        for ok in results:
+            if ok:
+                success += 1
+
+    print(f"[定时任务] 财务数据更新完成: {success}/{len(codes)}")
 
 def weekly_task():
     """每周最后一个交易日下午4点执行"""
@@ -285,13 +761,22 @@ def weekly_task():
     print("=" * 50)
 
     # 更新周K线
-    update_weekly_kline()
+    try:
+        update_weekly_kline()
+    except Exception as e:
+        print(f"[周任务] 周K线更新失败: {e}")
 
     # 重新选股
-    run_stock_selection()
+    try:
+        run_stock_selection()
+    except Exception as e:
+        print(f"[周任务] 选股失败: {e}")
 
     # 更新分析
-    update_analysis()
+    try:
+        update_analysis()
+    except Exception as e:
+        print(f"[周任务] 分析更新失败: {e}")
 
     print("=" * 50)
     print("[周任务] 执行完成!")
@@ -308,13 +793,22 @@ def monthly_task():
     print("=" * 50)
 
     # 更新月K线
-    update_monthly_kline()
+    try:
+        update_monthly_kline()
+    except Exception as e:
+        print(f"[月任务] 月K线更新失败: {e}")
 
     # 重新选股
-    run_stock_selection()
+    try:
+        run_stock_selection()
+    except Exception as e:
+        print(f"[月任务] 选股失败: {e}")
 
     # 更新分析
-    update_analysis()
+    try:
+        update_analysis()
+    except Exception as e:
+        print(f"[月任务] 分析更新失败: {e}")
 
     print("=" * 50)
     print("[月任务] 执行完成!")
