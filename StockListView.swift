@@ -37,6 +37,28 @@ struct StockListView: View {
                 }
                 .background(Color(hex: "1E1E1E"))
 
+                // 搜索栏
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    TextField("搜索股票代码或名称", text: $stockViewModel.searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .foregroundColor(.white)
+                    if !stockViewModel.searchText.isEmpty {
+                        Button {
+                            stockViewModel.searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color(hex: "2C2C2C"))
+                .cornerRadius(10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+
                 // 股票列表
                 List {
                     ForEach(Array(stockViewModel.filteredStocks.enumerated()), id: \.element.code) { index, stock in
@@ -57,7 +79,6 @@ struct StockListView: View {
         }
         .background(Color(hex: "121212"))
         .navigationTitle("智能选股 (\(stockViewModel.filteredStocks.count))")
-        .searchable(text: $stockViewModel.searchText, prompt: "搜索股票代码或名称")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 Button {
