@@ -23,6 +23,21 @@ def get_db():
     """获取数据库连接"""
     return pymysql.connect(**DB_CONFIG)
 
+def extract_quarter(report_name):
+    """从报告名称提取季度"""
+    if not report_name:
+        return ''
+    # 使用简单字符串匹配
+    if '一季' in report_name:
+        return report_name[:4] + 'Q1'
+    elif '中报' in report_name:
+        return report_name[:4] + 'Q2'
+    elif '三季' in report_name:
+        return report_name[:4] + 'Q3'
+    elif '年报' in report_name:
+        return report_name[:4] + 'Q4'
+    return ''
+
 @app.route('/api/v1/stocks', methods=['GET'])
 def get_stocks():
     """获取选股列表"""
@@ -35,12 +50,19 @@ def get_stocks():
 
     try:
         cursor.execute("""
-            SELECT s.code, s.name, s.price, s.change_pct, s.selected_at,
+            SELECT s.code, s.name, s.price, s.change_pct, s.selected_at, s.sector,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                    a.macd_divergence, a.trend_analysis, a.price_position,
-                   a.net_profit_yoy, a.net_profit_qoq, a.roe
+                   f.net_profit_yoy, f.net_profit_qoq, a.roe
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
+            LEFT JOIN (
+                SELECT code, net_profit_yoy, net_profit_qoq
+                FROM stock_financial_history
+                WHERE (code, report_date) IN (
+                    SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
+                )
+            ) f ON s.code = f.code
             ORDER BY s.selected_at DESC
             LIMIT %s OFFSET %s
         """, (page_size, offset))
@@ -433,6 +455,23 @@ def get_stock_detail(stock_code):
             result['chip_concentration'] = analysis.get('chip_concentration', 0.5)
             result['macd_divergence'] = analysis.get('macd_divergence', '{}')
             result['sector'] = analysis.get('sector', '')  # 所属行业板块
+            result['roe'] = analysis.get('roe', '')
+            result['revenue'] = analysis.get('revenue', '')
+            result['book_value_per_share'] = analysis.get('book_value_per_share', '')
+            result['financial_updated_at'] = analysis.get('financial_updated_at', '')
+
+        # 从财务历史表获取最新数据
+        cursor.execute("""
+            SELECT net_profit_yoy, net_profit_qoq, report_name
+            FROM stock_financial_history
+            WHERE code = %s
+            ORDER BY report_date DESC
+            LIMIT 1
+        """, (stock_code,))
+        fin_row = cursor.fetchone()
+        if fin_row:
+            result['net_profit_yoy'] = fin_row.get('net_profit_yoy', '')
+            result['net_profit_qoq'] = fin_row.get('net_profit_qoq', '')
 
         # 支持日/周/月K线 - 返回所有数据
         periods = ['daily', 'weekly', 'monthly']
@@ -603,6 +642,236 @@ def get_stock_changes():
                 'removed': removed_stocks,
                 'new_count': len(new_stocks),
                 'removed_count': len(removed_stocks)
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+@app.route('/api/v1/removed', methods=['GET'])
+def get_removed_stocks():
+    """获取被剔除股票的历史记录"""
+    # 月份参数，如 2026-04
+    month = request.args.get('month')
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        if month:
+            # 查询指定月份
+            cursor.execute("""
+                SELECT code, name, sector, price, change_pct, removed_at
+                FROM stock_removed
+                WHERE DATE_FORMAT(removed_at, '%%Y-%%m') = %s
+                ORDER BY removed_at DESC, code ASC
+            """, (month,))
+        else:
+            # 获取最近30天的剔除记录
+            cursor.execute("""
+                SELECT code, name, sector, price, change_pct, removed_at
+                FROM stock_removed
+                ORDER BY removed_at DESC, code ASC
+                LIMIT 100
+            """)
+
+        rows = cursor.fetchall()
+
+        # 按日期分组
+        grouped = {}
+        for row in rows:
+            date = row['removed_at'].strftime('%Y-%m-%d') if row.get('removed_at') else ''
+            if date not in grouped:
+                grouped[date] = []
+            if row.get('price'):
+                row['price'] = float(row['price'])
+            if row.get('change_pct'):
+                row['change_pct'] = float(row['change_pct'])
+            grouped[date].append(row)
+
+        return jsonify({
+            'code': 0,
+            'data': grouped
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/changes/<date>', methods=['GET'])
+def get_changes_by_date(date):
+    """获取指定日期的变化"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 从stock_history获取指定日期的数据
+        cursor.execute("""
+            SELECT code, name FROM stock_history WHERE selected_at = %s
+        """, (date,))
+        stocks_on_date = {row['code']: row['name'] for row in cursor.fetchall()}
+
+        # 获取前一天的数据（找到上一个有数据的日期）
+        from datetime import datetime, timedelta
+        dt = datetime.strptime(date, '%Y-%m-%d')
+
+        # 找到上一个有数据的日期
+        cursor.execute("""
+            SELECT DATE_FORMAT(selected_at, '%%Y-%%m-%%d') as dt
+            FROM stock_history
+            WHERE selected_at < %s
+            GROUP BY DATE_FORMAT(selected_at, '%%Y-%%m-%%d')
+            ORDER BY MAX(selected_at) DESC
+            LIMIT 1
+        """, (date,))
+        prev_row = cursor.fetchone()
+        prev_date = prev_row['dt'] if prev_row else None
+
+        prev_stocks = {}
+        if prev_date:
+            cursor.execute("""
+                SELECT code, name FROM stock_history WHERE selected_at = %s
+            """, (prev_date,))
+            prev_stocks = {row['code']: row['name'] for row in cursor.fetchall()}
+
+        # 今日新增（今日有，之前没有）
+        new_stocks = []
+        for code, name in stocks_on_date.items():
+            if code not in prev_stocks:
+                # 尝试获取sector信息
+                cursor.execute("SELECT sector, price, change_pct FROM stocks WHERE code = %s", (code,))
+                stock_info = cursor.fetchone()
+                sector = stock_info['sector'] if stock_info else ''
+                price = float(stock_info['price']) if stock_info and stock_info.get('price') else None
+                change_pct = float(stock_info['change_pct']) if stock_info and stock_info.get('change_pct') else None
+                new_stocks.append({
+                    'code': code,
+                    'name': name,
+                    'type': 'new',
+                    'sector': sector or '',
+                    'price': price,
+                    'change_pct': change_pct
+                })
+
+        # 今日剔除（之前有，今日没有）
+        removed_stocks = []
+        for code, name in prev_stocks.items():
+            if code not in stocks_on_date:
+                # 从stock_removed获取剔除时的信息
+                cursor.execute("""
+                    SELECT sector, price, change_pct FROM stock_removed
+                    WHERE code = %s AND removed_at = %s
+                """, (code, date))
+                removed_info = cursor.fetchone()
+                sector = removed_info['sector'] if removed_info else ''
+                price = float(removed_info['price']) if removed_info and removed_info.get('price') else None
+                change_pct = float(removed_info['change_pct']) if removed_info and removed_info.get('change_pct') else None
+                removed_stocks.append({
+                    'code': code,
+                    'name': name,
+                    'type': 'removed',
+                    'sector': sector or '',
+                    'price': price,
+                    'change_pct': change_pct
+                })
+
+        # 如果前一天没有数据（可能是第一天），则全部算新增
+        if not prev_stocks:
+            new_stocks = []
+            for code, name in stocks_on_date.items():
+                cursor.execute("SELECT sector, price, change_pct FROM stocks WHERE code = %s", (code,))
+                stock_info = cursor.fetchone()
+                sector = stock_info['sector'] if stock_info else ''
+                price = float(stock_info['price']) if stock_info and stock_info.get('price') else None
+                change_pct = float(stock_info['change_pct']) if stock_info and stock_info.get('change_pct') else None
+                new_stocks.append({
+                    'code': code,
+                    'name': name,
+                    'type': 'new',
+                    'sector': sector or '',
+                    'price': price,
+                    'change_pct': change_pct
+                })
+            removed_stocks = []
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'date': date,
+                'new': new_stocks,
+                'removed': removed_stocks,
+                'new_count': len(new_stocks),
+                'removed_count': len(removed_stocks)
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/changes/month/<year_month>', methods=['GET'])
+def get_changes_by_month(year_month):
+    """获取指定月份的变化汇总"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取该月所有有数据的日期
+        cursor.execute("""
+            SELECT DISTINCT DATE_FORMAT(selected_at, '%%Y-%%m-%%d') as dt
+            FROM stock_history
+            WHERE DATE_FORMAT(selected_at, '%%Y-%%m') = %s
+            ORDER BY dt
+        """, (year_month,))
+        dates = [row['dt'] for row in cursor.fetchall()]
+
+        # 获取该月被剔除的股票
+        cursor.execute("""
+            SELECT code, name, sector, price, change_pct, removed_at
+            FROM stock_removed
+            WHERE DATE_FORMAT(removed_at, '%%Y-%%m') = %s
+            ORDER BY removed_at DESC
+        """, (year_month,))
+        removed_rows = cursor.fetchall()
+
+        removed_by_date = {}
+        for row in removed_rows:
+            date = row['removed_at'].strftime('%Y-%m-%d') if row.get('removed_at') else ''
+            if date not in removed_by_date:
+                removed_by_date[date] = []
+            if row.get('price'):
+                row['price'] = float(row['price'])
+            if row.get('change_pct'):
+                row['change_pct'] = float(row['change_pct'])
+            removed_by_date[date].append(row)
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'month': year_month,
+                'dates': dates,
+                'removed': removed_by_date
             }
         })
 
@@ -960,7 +1229,7 @@ def refresh_analysis_scheduled():
                 analysis = analyzer.analyze_stock(code)
 
                 # 检查分析数据是否已存在
-                cursor.execute("SELECT id FROM stock_analysis WHERE code = %s", (code,))
+                cursor.execute("SELECT code FROM stock_analysis WHERE code = %s", (code,))
                 exists = cursor.fetchone()
 
                 if exists:
@@ -1018,6 +1287,295 @@ def refresh_analysis_scheduled():
             cursor.close()
         if conn:
             conn.close()
+
+
+@app.route('/api/v1/financial_updates', methods=['GET'])
+def get_financial_updates():
+    """获取今日财务数据有更新的股票"""
+    conn = None
+    cursor = None
+    try:
+        sort_by = request.args.get('sort_by', 'net_profit_yoy')  # net_profit_yoy, net_profit_qoq
+        order = request.args.get('order', 'desc')  # asc, desc
+
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # 验证排序参数
+        valid_sorts = ['net_profit_yoy', 'net_profit_qoq']
+        if sort_by not in valid_sorts:
+            sort_by = 'net_profit_yoy'
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+
+        # 从daily_financial_updates获取今日更新的数据，join获取名称
+        cursor.execute(f"""
+            SELECT DISTINCT d.code, n.name, d.report_date, d.report_name,
+                   d.net_profit_yoy, d.net_profit_qoq, d.revenue_yoy, d.updated_date,
+                   s.price, s.change_pct
+            FROM daily_financial_updates d
+            LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
+            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
+            WHERE d.updated_date = %s
+            ORDER BY d.{sort_by} {order.upper()}
+        """, (today,))
+
+        rows = cursor.fetchall()
+        stocks = []
+        for row in rows:
+            code = str(row['code'])
+            # 如果有price说明在选股列表中
+            has_price = row.get('price') is not None
+            stock = {
+                'code': code,
+                'name': row['name'] or '',
+                'report_date': str(row['report_date']) if row['report_date'] else '',
+                'report_name': row['report_name'] or '',
+                'net_profit_yoy': row['net_profit_yoy'] or '',
+                'net_profit_qoq': row['net_profit_qoq'] or '',
+                'revenue_yoy': row['revenue_yoy'] or '',
+                'financial_updated_at': row['updated_date'].strftime('%Y-%m-%d') if row['updated_date'] else today,
+                'price': float(row['price']) if row.get('price') else None,
+                'change_pct': float(row['change_pct']) if row.get('change_pct') else None,
+                'in_watchlist': has_price
+            }
+            stocks.append(stock)
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'date': today,
+                'count': len(stocks),
+                'stocks': stocks
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/financial_updates/date/<date_str>', methods=['GET'])
+def get_financial_updates_by_date(date_str):
+    """获取指定日期的财务更新"""
+    conn = None
+    cursor = None
+    try:
+        sort_by = request.args.get('sort_by', 'net_profit_yoy')
+        order = request.args.get('order', 'desc')
+
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 验证日期格式
+        try:
+            datetime.strptime(date_str, '%Y-%m-%d')
+        except:
+            return jsonify({'code': 1, 'message': '日期格式错误'})
+
+        # 验证排序参数
+        valid_sorts = ['net_profit_yoy', 'net_profit_qoq']
+        if sort_by not in valid_sorts:
+            sort_by = 'net_profit_yoy'
+        if order not in ['asc', 'desc']:
+            order = 'desc'
+
+        # 获取指定日期的数据，join获取名称
+        cursor.execute(f"""
+            SELECT DISTINCT d.code, n.name, d.report_date, d.report_name,
+                   d.net_profit_yoy, d.net_profit_qoq, d.revenue_yoy, d.updated_date,
+                   s.price, s.change_pct
+            FROM daily_financial_updates d
+            LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
+            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
+            WHERE d.updated_date = %s
+            ORDER BY d.{sort_by} {order.upper()}
+        """, (date_str,))
+
+        rows = cursor.fetchall()
+        stocks = []
+        for row in rows:
+            stock = {
+                'code': row['code'],
+                'name': row['name'] or '',
+                'report_date': str(row['report_date']) if row['report_date'] else '',
+                'report_name': row['report_name'] or '',
+                'net_profit_yoy': row['net_profit_yoy'] or '',
+                'net_profit_qoq': row['net_profit_qoq'] or '',
+                'revenue_yoy': row['revenue_yoy'] or '',
+                'financial_updated_at': row['updated_date'].strftime('%Y-%m-%d') if row['updated_date'] else date_str,
+                'price': float(row['price']) if row.get('price') else None,
+                'change_pct': float(row['change_pct']) if row.get('change_pct') else None
+            }
+            stocks.append(stock)
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'date': date_str,
+                'count': len(stocks),
+                'stocks': stocks
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/financial_updates/dates', methods=['GET'])
+def get_financial_update_dates():
+    """获取有财务更新的日期列表（用于日历）"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取所有有更新的日期及其数量
+        cursor.execute("""
+            SELECT updated_date, COUNT(*) as count
+            FROM daily_financial_updates
+            GROUP BY updated_date
+            ORDER BY updated_date DESC
+        """)
+
+        rows = cursor.fetchall()
+        dates = []
+        for row in rows:
+            dates.append({
+                'date': row['updated_date'].strftime('%Y-%m-%d') if row['updated_date'] else '',
+                'count': row['count']
+            })
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'dates': dates,
+                'total': len(dates)
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/financial_updates/month/<year_month>', methods=['GET'])
+def get_financial_updates_by_month(year_month):
+    """获取指定月份的财务更新"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 验证月份格式
+        try:
+            datetime.strptime(year_month + '-01', '%Y-%m-%d')
+        except:
+            return jsonify({'code': 1, 'message': '月份格式错误'})
+
+        # 获取指定月份的数据
+        cursor.execute("""
+            SELECT updated_date, COUNT(*) as count
+            FROM daily_financial_updates
+            WHERE DATE_FORMAT(updated_date, '%%Y-%%m') = %s
+            GROUP BY updated_date
+            ORDER BY updated_date
+        """, (year_month,))
+
+        rows = cursor.fetchall()
+        dates = []
+        for row in rows:
+            dates.append({
+                'date': row['updated_date'].strftime('%Y-%m-%d') if row['updated_date'] else '',
+                'count': row['count']
+            })
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'month': year_month,
+                'dates': dates
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+@app.route('/api/v1/stock/<stock_code>/financial_history', methods=['GET'])
+def get_stock_financial_history(stock_code):
+    """获取股票的历史财务数据（2年）"""
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 查询最近2年的财务数据（最新的8条，然后反转顺序）
+        cursor.execute("""
+            SELECT report_date, report_name, quarter, net_profit_yoy, net_profit_qoq, revenue_yoy
+            FROM stock_financial_history
+            WHERE code = %s
+            ORDER BY report_date DESC
+            LIMIT 8
+        """, (stock_code,))
+
+        rows = cursor.fetchall()
+        # 反转顺序（从旧到新）
+        rows = list(reversed(rows))
+
+        history = []
+        for row in rows:
+            report_name = row.get('report_name', '')
+            # 从report_name提取季度
+            quarter = extract_quarter(report_name)
+            history.append({
+                'report_date': row['report_date'].strftime('%Y-%m-%d') if row.get('report_date') else '',
+                'report_name': report_name,
+                'quarter': quarter,
+                'net_profit_yoy': row.get('net_profit_yoy', ''),
+                'net_profit_qoq': row.get('net_profit_qoq', ''),
+                'revenue_yoy': row.get('revenue_yoy', '')
+            })
+
+        return jsonify({
+            'code': 0,
+            'data': {
+                'code': stock_code,
+                'count': len(history),
+                'history': history
+            }
+        })
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 if __name__ == '__main__':
     # 注册定时任务（下午4点更新分析数据）
