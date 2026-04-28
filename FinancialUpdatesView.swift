@@ -390,8 +390,9 @@ struct FinancialUpdateCard: View {
         guard let v = value else { return .gray }
         let clean = v.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
         guard let num = Double(clean) else { return .gray }
-        if num > 0 { return Color(hex: "FFC107") }
-        else if num < 0 { return Color(hex: "1E88E5") }
+        // 涨=红色，跌=绿色
+        if num > 0 { return Color(hex: "F44336") }
+        else if num < 0 { return Color(hex: "4CAF50") }
         return .gray
     }
 }
