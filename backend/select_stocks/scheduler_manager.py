@@ -9,6 +9,9 @@ import threading
 import time
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# 事件常量
+EVENT_JOB_EXECUTED = 'job_executed'
 import pymysql
 import concurrent.futures
 
@@ -622,6 +625,7 @@ def update_incremental_financial():
     import akshare as ak
     import pandas as pd
     from datetime import datetime
+    import concurrent.futures
 
     DB_CONFIG = {
         'host': 'localhost',
@@ -681,7 +685,8 @@ def update_incremental_financial():
                     'report_date': row['report_date'],
                     'report_name': row.get('report_name', ''),
                     'net_profit_yoy': f"{float(row.get('single_yoy', 0)) * 100:.2f}%" if pd.notna(row.get('single_yoy')) else '',
-                    'net_profit_qoq': f"{float(row.get('mom', 0)) * 100:.1f}%" if pd.notna(row.get('mom')) else ''
+                    'net_profit_qoq': f"{float(row.get('mom', 0)) * 100:.1f}%" if pd.notna(row.get('mom')) else '',
+                    'is_new': row['report_date'] == datetime.datetime.now().strftime('%Y-%m-%d')
                 }
             except:
                 return None
@@ -704,14 +709,16 @@ def update_incremental_financial():
                         VALUES (%s, %s, %s, %s, %s, NOW())
                     """, (result['code'], result['report_date'], result['report_name'],
                          result['net_profit_yoy'], result['net_profit_qoq']))
-                    # 同时保存到每日财务更新表
-                    cursor.execute("""
-                        INSERT IGNORE INTO daily_financial_updates
-                        (code, name, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, updated_date)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, CURDATE())
-                    """, (result['code'], '', result['report_date'], result['report_name'],
-                         result['net_profit_yoy'], result['net_profit_qoq'], ''))
-                    saved += 1
+
+                    # 只保存最近7天内发布财报的股票到每日更新表
+                    if result.get('is_new', False):
+                        cursor.execute("""
+                            INSERT IGNORE INTO daily_financial_updates
+                            (code, name, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, updated_date)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, CURDATE())
+                        """, (result['code'], '', result['report_date'], result['report_name'],
+                             result['net_profit_yoy'], result['net_profit_qoq'], ''))
+                        saved += 1
                 except:
                     continue
 
@@ -921,28 +928,38 @@ def monthly_task():
     print("[月任务] 执行完成!")
     print("=" * 50)
 
+def is_last_trading_day():
+    """检查今天是否为当月最后一个交易日"""
+    import datetime
+    today = datetime.date.today()
+    # 检查明天是否是下个月
+    tomorrow = today + datetime.timedelta(days=1)
+    return tomorrow.month != today.month
+
 def start_scheduler():
     """启动定时任务调度器"""
     scheduler = BackgroundScheduler()
 
     # 每日下午4点执行
-    scheduler.add_job(daily_task, 'cron', hour=16, minute=0)
+    scheduler.add_job(daily_task, 'cron', hour=16, minute=0, id='daily_task')
 
     # 每小时增量更新财务数据
-    scheduler.add_job(update_incremental_financial, 'interval', hours=1)
+    scheduler.add_job(update_incremental_financial, 'interval', hours=1, id='incremental_financial')
 
-    # 每周五下午4点执行（检查是否为最后交易日）
-    scheduler.add_job(weekly_task, 'cron', hour=16, minute=10)
+    # 每周五晚上7点执行（检查是否为最后交易日）
+    scheduler.add_job(weekly_task, 'cron', hour=19, minute=0, day_of_week='fri', id='weekly_task')
 
-    # 每月最后几个交易日下午4点执行
-    scheduler.add_job(monthly_task, 'cron', hour=16, minute=20, day='28-31')
+    # 每月最后一个交易日晚上10点执行
+    scheduler.add_job(monthly_task, 'cron', hour=22, minute=0, day='28-31', id='monthly_task')
 
     scheduler.start()
+    # 启动时立即执行一次增量财务更新
+    update_incremental_financial()
     print("[调度器] 定时任务已启动")
     print("  - 每小时: 增量更新今日发布财报的股票")
     print("  - 每日16:00: 更新日K + 选股 + 分析")
-    print("  - 每周五16:10: 更新周K + 选股 + 分析")
-    print("  - 每月末16:20: 更新月K + 选股 + 分析")
+    print("  - 每周五19:00: 更新周K + 选股 + 分析")
+    print("  - 每月末22:00: 更新月K + 选股 + 分析")
 
 if __name__ == '__main__':
     # 可以手动触发任务进行测试

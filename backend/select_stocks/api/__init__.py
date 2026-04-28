@@ -229,6 +229,42 @@ def apply_filters(stocks, filters, conn=None):
                     passed = False
                     break
 
+            elif filter_name == 'low_volume':
+                # 明显缩量：成交量低于20日平均量的50%
+                if not check_low_volume(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'yoy_positive':
+                # 业绩同比转正
+                if not check_yoy_positive(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'qoq_positive':
+                # 业绩环比转正
+                if not check_qoq_positive(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'volume_rise_stagnant':
+                # 放量滞涨：成交量放大但价格不涨
+                if not check_volume_rise_stagnant(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'support_level':
+                # 跌到支撑位：当前价格接近20日低点
+                if not check_support_level(stock.get('code'), conn):
+                    passed = False
+                    break
+
+            elif filter_name == 'resistance_level':
+                # 涨到压力位：当前价格接近20日高点
+                if not check_resistance_level(stock.get('code'), conn):
+                    passed = False
+                    break
+
             elif filter_name == 'high_dividend':
                 # 高股息：使用PE分位作为代理（低PE高股息概率大）
                 if not check_high_dividend(stock):
@@ -357,6 +393,371 @@ def check_volume_break(stock_code, conn):
 
         # 放量：超过20日最高量的70%或突破
         return latest_volume > max_volume_20d * 0.7
+    except:
+        return False
+
+def check_low_volume(stock_code, conn):
+    """检查明显缩量：成交量低于20日平均量的50%"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最近21个交易日
+        cursor.execute("""
+            SELECT date, volume
+            FROM stock_kline
+            WHERE code = %s AND period = 'daily'
+            ORDER BY date DESC
+            LIMIT 21
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 21:
+            return False
+
+        # 最新一天的成交量
+        latest_volume = float(klines[0]['volume'])
+
+        # 20日平均成交量
+        volumes = [float(k['volume']) for k in klines[1:21]]
+        avg_volume_20d = sum(volumes) / len(volumes) if volumes else 0
+
+        if avg_volume_20d <= 0:
+            return False
+
+        # 缩量：低于20日平均量的50%
+        return latest_volume < avg_volume_20d * 0.5
+    except:
+        return False
+
+def check_yoy_positive(stock_code, conn):
+    """检查业绩同比转正：净利润同比 > 0"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最新财报的净利润同比
+        cursor.execute("""
+            SELECT net_profit_yoy
+            FROM stock_financial_history
+            WHERE code = %s
+            ORDER BY report_date DESC
+            LIMIT 1
+        """, (stock_code,))
+
+        row = cursor.fetchone()
+        if not row or not row.get('net_profit_yoy'):
+            return False
+
+        yoy = row['net_profit_yoy']
+        if not yoy:
+            return False
+
+        # 解析百分比，去除%+符号
+        clean_yoy = yoy.replace('%', '').replace('+', '').strip()
+        try:
+            value = float(clean_yoy)
+            return value > 0
+        except:
+            return False
+    except:
+        return False
+
+def check_qoq_positive(stock_code, conn):
+    """检查业绩环比转正：净利润环比 > 0"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最新财报的净利润环比
+        cursor.execute("""
+            SELECT net_profit_qoq
+            FROM stock_financial_history
+            WHERE code = %s
+            ORDER BY report_date DESC
+            LIMIT 1
+        """, (stock_code,))
+
+        row = cursor.fetchone()
+        if not row or not row.get('net_profit_qoq'):
+            return False
+
+        qoq = row['net_profit_qoq']
+        if not qoq:
+            return False
+
+        # 解析百分比，去除%+符号
+        clean_qoq = qoq.replace('%', '').replace('+', '').strip()
+        try:
+            value = float(clean_qoq)
+            return value > 0
+        except:
+            return False
+    except:
+        return False
+
+def check_volume_rise_stagnant(stock_code, conn):
+    """检查放量滞涨：成交量放大但价格不涨"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取最近21个交易日
+        cursor.execute("""
+            SELECT date, volume, close
+            FROM stock_kline
+            WHERE code = %s AND period = 'daily'
+            ORDER BY date DESC
+            LIMIT 21
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 21:
+            return False
+
+        # 最新一天的成交量和价格
+        latest_volume = float(klines[0]['volume'])
+        latest_price = float(klines[0]['close'])
+
+        # 20日平均成交量
+        volumes = [float(k['volume']) for k in klines[1:21]]
+        avg_volume_20d = sum(volumes) / len(volumes) if volumes else 0
+
+        if avg_volume_20d <= 0:
+            return False
+
+        # 放量：成交量 > 20日平均量的1.5倍
+        is_volume_up = latest_volume > avg_volume_20d * 1.5
+
+        # 获取20日前的价格
+        old_price = float(klines[20]['close'])
+        if old_price <= 0:
+            return False
+
+        # 滞涨：价格涨幅 < 5%
+        price_change = (latest_price - old_price) / old_price * 100
+        is_price_stagnant = price_change < 5
+
+        return is_volume_up and is_price_stagnant
+    except:
+        return False
+
+def find_zigzag_peaks_troughs(highs, lows, threshold=5):
+    """
+    ZigZag算法识别波峰和波谷
+    threshold: 最小波动幅度百分比，超过才认为是有效反转
+    """
+    if len(highs) < 10:
+        return [], []
+
+    peaks = []  # 波峰索引
+    troughs = []  # 波谷索引
+
+    # 使用close计算趋势
+    prices = [(h + l) / 2 for h, l in zip(highs, lows)]  # 用高低点中值
+
+    i = 0
+    last_extreme_idx = 0
+    last_extreme_type = None  # 'peak' or 'trough'
+
+    while i < len(prices) - 1:
+        change = (prices[i + 1] - prices[i]) / prices[i] * 100 if prices[i] != 0 else 0
+
+        # 确定初始趋势
+        if abs(change) >= threshold:
+            direction = 1 if change > 0 else -1
+            last_extreme_type = 'trough' if direction == 1 else 'peak'
+            last_extreme_idx = i
+            i += 1
+            break
+        i += 1
+
+    if i >= len(prices) - 1:
+        return [], []
+
+    # 继续扫描找到波峰波谷
+    while i < len(prices):
+        if last_extreme_type == 'trough':
+            # 找波峰：从低点向上找最高点
+            max_val = prices[last_extreme_idx]
+            max_idx = last_extreme_idx
+            while i < len(prices):
+                if prices[i] > max_val:
+                    change_from_last = (prices[i] - max_val) / max_val * 100 if max_val != 0 else 0
+                    if change_from_last >= threshold:
+                        max_val = prices[i]
+                        max_idx = i
+                    elif prices[i] < max_val * (1 - threshold / 100):
+                        # 反转超过阈值，确认波峰
+                        peaks.append(max_idx)
+                        last_extreme_type = 'peak'
+                        last_extreme_idx = max_idx
+                        break
+                elif prices[i] < max_val:
+                    if (max_val - prices[i]) / max_val * 100 >= threshold:
+                        # 反转超过阈值，确认波峰
+                        peaks.append(max_idx)
+                        last_extreme_type = 'peak'
+                        last_extreme_idx = i
+                        break
+                i += 1
+        else:
+            # 找波谷：从高点向下找最低点
+            min_val = prices[last_extreme_idx]
+            min_idx = last_extreme_idx
+            while i < len(prices):
+                if prices[i] < min_val:
+                    change_from_last = (min_val - prices[i]) / min_val * 100 if min_val != 0 else 0
+                    if change_from_last >= threshold:
+                        min_val = prices[i]
+                        min_idx = i
+                    elif prices[i] > min_val * (1 + threshold / 100):
+                        # 反转超过阈值，确认波谷
+                        troughs.append(min_idx)
+                        last_extreme_type = 'trough'
+                        last_extreme_idx = min_idx
+                        break
+                elif prices[i] > min_val:
+                    if (prices[i] - min_val) / min_val * 100 >= threshold:
+                        # 反转超过阈值，确认波谷
+                        troughs.append(min_idx)
+                        last_extreme_type = 'trough'
+                        last_extreme_idx = i
+                        break
+                i += 1
+
+        i += 1
+
+    return peaks, troughs
+
+def check_support_level(stock_code, conn):
+    """检查跌到支撑位：回踩确认 + 波浪分析"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取200根周K线
+        cursor.execute("""
+            SELECT date, close, high, low
+            FROM stock_kline
+            WHERE code = %s AND period = 'weekly'
+            ORDER BY date DESC
+            LIMIT 200
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 100:
+            return False
+
+        # 反转数据（从早到晚排序）
+        klines = list(reversed(klines))
+
+        # 提取数据
+        closes = [float(k['close']) for k in klines]
+        highs = [float(k['high']) for k in klines]
+        lows = [float(k['low']) for k in klines]
+
+        current_price = closes[-1]
+        if current_price <= 0:
+            return False
+
+        # 1. ZigZag算法找波峰和波谷
+        peaks, troughs = find_zigzag_peaks_troughs(highs, lows, threshold=5)
+
+        if len(peaks) < 2 or len(troughs) < 1:
+            return False
+
+        # 2. 找到前一个波谷（比当前低）
+        current_idx = len(closes) - 1
+        prev_trough = None
+        for t in reversed(troughs):
+            if t < current_idx:
+                prev_trough = t
+                break
+
+        # 3. 判断当前是否处于下跌阶段
+        # 下跌：从波峰回落
+        is_declining = current_price < closes[-2] * 0.95 if len(closes) >= 2 else False
+
+        # 4. 强支撑：下跌中跌到前一个波谷附近
+        strong_support = False
+        if prev_trough is not None and is_declining:
+            trough_price = lows[prev_trough]
+            if trough_price > 0:
+                distance = abs(current_price - trough_price) / trough_price * 100
+                strong_support = distance <= 10
+
+        # 5. 普通支撑：接近近期低点
+        import statistics
+        recent_lows = sorted(lows[-50:])
+        min_low = recent_lows[0]
+        low_distance = (current_price - min_low) / min_low * 100 if min_low > 0 else 100
+
+        normal_support = low_distance <= 10
+
+        return strong_support or normal_support
+    except:
+        return False
+
+def check_resistance_level(stock_code, conn):
+    """检查涨到压力位：反弹遇阻 + 波浪分析"""
+    try:
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        # 获取200根周K线
+        cursor.execute("""
+            SELECT date, close, high, low
+            FROM stock_kline
+            WHERE code = %s AND period = 'weekly'
+            ORDER BY date DESC
+            LIMIT 200
+        """, (stock_code,))
+
+        klines = cursor.fetchall()
+        if len(klines) < 100:
+            return False
+
+        # 反转数据（从早到晚排序）
+        klines = list(reversed(klines))
+
+        # 提取数据
+        closes = [float(k['close']) for k in klines]
+        highs = [float(k['high']) for k in klines]
+        lows = [float(k['low']) for k in klines]
+
+        current_price = closes[-1]
+        if current_price <= 0:
+            return False
+
+        # 1. ZigZag算法找波峰和波谷
+        peaks, troughs = find_zigzag_peaks_troughs(highs, lows, threshold=5)
+
+        if len(peaks) < 1 or len(troughs) < 2:
+            return False
+
+        # 2. 找到前一个波谷（比当前低）
+        current_idx = len(closes) - 1
+        prev_trough = None
+        for t in reversed(troughs):
+            if t < current_idx:
+                prev_trough = t
+                break
+
+        # 3. 判断当前是否处于上涨/反弹阶段
+        is_rising = current_price > closes[-2] * 1.05 if len(closes) >= 2 else False
+
+        # 4. 强压力：反弹中涨到前一个波谷附近
+        strong_resistance = False
+        if prev_trough is not None and is_rising:
+            trough_price = lows[prev_trough]
+            if trough_price > 0:
+                distance = abs(current_price - trough_price) / trough_price * 100
+                strong_resistance = distance <= 10
+
+        # 5. 普通压力：接近近期高点
+        import statistics
+        recent_highs = sorted(highs[-50:], reverse=True)
+        max_high = recent_highs[0]
+        high_distance = (max_high - current_price) / max_high * 100 if max_high > 0 else 100
+
+        normal_resistance = high_distance <= 10
+
+        return strong_resistance or normal_resistance
     except:
         return False
 
