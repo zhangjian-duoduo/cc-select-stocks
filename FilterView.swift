@@ -3,13 +3,14 @@ import SwiftUI
 struct FilterView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
 
-    // 11个筛选条件
+    // 12个筛选条件
     @State private var momentumReversal = false  // 动量反转
     @State private var maAlignment = false       // 均线多头
     @State private var volumeBreak = false     // 放量突破
     @State private var lowVolume = false       // 明显缩量
     @State private var yoyPositive = false    // 业绩同比转正
     @State private var qoqPositive = false    // 业绩环比转正
+    @State private var volumeRiseStagnant = false  // 放量滞涨
     @State private var highDividend = false    // 高股息
     @State private var lowPB = false          // 破净
     @State private var smallCap = false        // 小盘弹性
@@ -83,6 +84,15 @@ struct FilterView: View {
                         subtitle: "净利润环比 > 0%",
                         isOn: $qoqPositive,
                         color: "8BC34A"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "放量滞涨",
+                        subtitle: "成交量放大但价格不涨",
+                        isOn: $volumeRiseStagnant,
+                        color: "FF5722"
                     )
 
                     Divider().background(Color.gray.opacity(0.3))
@@ -181,6 +191,7 @@ struct FilterView: View {
         if lowVolume { filters.append("low_volume") }
         if yoyPositive { filters.append("yoy_positive") }
         if qoqPositive { filters.append("qoq_positive") }
+        if volumeRiseStagnant { filters.append("volume_rise_stagnant") }
         if highDividend { filters.append("high_dividend") }
         if lowPB { filters.append("low_pb") }
         if smallCap { filters.append("small_cap") }
