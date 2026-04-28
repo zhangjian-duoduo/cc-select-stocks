@@ -3,10 +3,13 @@ import SwiftUI
 struct FilterView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
 
-    // 8个筛选条件
+    // 11个筛选条件
     @State private var momentumReversal = false  // 动量反转
     @State private var maAlignment = false       // 均线多头
     @State private var volumeBreak = false     // 放量突破
+    @State private var lowVolume = false       // 明显缩量
+    @State private var yoyPositive = false    // 业绩同比转正
+    @State private var qoqPositive = false    // 业绩环比转正
     @State private var highDividend = false    // 高股息
     @State private var lowPB = false          // 破净
     @State private var smallCap = false        // 小盘弹性
@@ -53,6 +56,33 @@ struct FilterView: View {
                         subtitle: "成交量放大 + 突破20日高点",
                         isOn: $volumeBreak,
                         color: "FF9800"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "明显缩量",
+                        subtitle: "成交量 < 20日均量50%",
+                        isOn: $lowVolume,
+                        color: "607D8B"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "业绩同比转正",
+                        subtitle: "净利润同比 > 0%",
+                        isOn: $yoyPositive,
+                        color: "4CAF50"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "业绩环比转正",
+                        subtitle: "净利润环比 > 0%",
+                        isOn: $qoqPositive,
+                        color: "8BC34A"
                     )
 
                     Divider().background(Color.gray.opacity(0.3))
@@ -148,6 +178,9 @@ struct FilterView: View {
         if momentumReversal { filters.append("momentum_reversal") }
         if maAlignment { filters.append("ma_alignment") }
         if volumeBreak { filters.append("volume_break") }
+        if lowVolume { filters.append("low_volume") }
+        if yoyPositive { filters.append("yoy_positive") }
+        if qoqPositive { filters.append("qoq_positive") }
         if highDividend { filters.append("high_dividend") }
         if lowPB { filters.append("low_pb") }
         if smallCap { filters.append("small_cap") }
