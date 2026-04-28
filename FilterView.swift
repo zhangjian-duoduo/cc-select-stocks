@@ -3,7 +3,7 @@ import SwiftUI
 struct FilterView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
 
-    // 12个筛选条件
+    // 14个筛选条件
     @State private var momentumReversal = false  // 动量反转
     @State private var maAlignment = false       // 均线多头
     @State private var volumeBreak = false     // 放量突破
@@ -11,6 +11,8 @@ struct FilterView: View {
     @State private var yoyPositive = false    // 业绩同比转正
     @State private var qoqPositive = false    // 业绩环比转正
     @State private var volumeRiseStagnant = false  // 放量滞涨
+    @State private var supportLevel = false   // 跌到支撑位
+    @State private var resistanceLevel = false  // 涨到压力位
     @State private var highDividend = false    // 高股息
     @State private var lowPB = false          // 破净
     @State private var smallCap = false        // 小盘弹性
@@ -93,6 +95,24 @@ struct FilterView: View {
                         subtitle: "成交量放大但价格不涨",
                         isOn: $volumeRiseStagnant,
                         color: "FF5722"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "跌到支撑位",
+                        subtitle: "价格接近20日低点",
+                        isOn: $supportLevel,
+                        color: "2196F3"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
+                        title: "涨到压力位",
+                        subtitle: "价格接近20日高点",
+                        isOn: $resistanceLevel,
+                        color: "F44336"
                     )
 
                     Divider().background(Color.gray.opacity(0.3))
@@ -192,6 +212,8 @@ struct FilterView: View {
         if yoyPositive { filters.append("yoy_positive") }
         if qoqPositive { filters.append("qoq_positive") }
         if volumeRiseStagnant { filters.append("volume_rise_stagnant") }
+        if supportLevel { filters.append("support_level") }
+        if resistanceLevel { filters.append("resistance_level") }
         if highDividend { filters.append("high_dividend") }
         if lowPB { filters.append("low_pb") }
         if smallCap { filters.append("small_cap") }
