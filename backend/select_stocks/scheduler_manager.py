@@ -686,7 +686,7 @@ def update_incremental_financial():
                     'report_name': row.get('report_name', ''),
                     'net_profit_yoy': f"{float(row.get('single_yoy', 0)) * 100:.2f}%" if pd.notna(row.get('single_yoy')) else '',
                     'net_profit_qoq': f"{float(row.get('mom', 0)) * 100:.1f}%" if pd.notna(row.get('mom')) else '',
-                    'is_new': row['report_date'] == datetime.datetime.now().strftime('%Y-%m-%d')
+                    'is_new': True  # 今天发布公告的股票都保存
                 }
             except:
                 return None

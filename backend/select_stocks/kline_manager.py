@@ -240,7 +240,7 @@ def init_all_kline_data(stock_limit: int = None):
         for period in periods:
             try:
                 # 添加延时避免被限流
-                time.sleep(0.3)
+                time.sleep(0.35)  # 间隔，避免被封
 
                 df = fetch_kline_data(code, period)
                 if df is not None:
@@ -275,7 +275,7 @@ def update_today_kline():
 
             for period in periods:
                 try:
-                    time.sleep(0.2)
+                    time.sleep(0.35)  # 间隔，避免被封
 
                     df = fetch_kline_data(code, period)
                     if df is not None and not df.empty:
