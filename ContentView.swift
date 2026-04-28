@@ -13,6 +13,13 @@ struct ContentView: View {
             }
 
             NavigationStack {
+                FinancialUpdatesView()
+            }
+            .tabItem {
+                Label("财务", systemImage: "dollarsign.circle")
+            }
+
+            NavigationStack {
                 ChangesView()
             }
             .tabItem {

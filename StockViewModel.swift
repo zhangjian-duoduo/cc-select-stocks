@@ -10,12 +10,17 @@ enum SortOption: String, CaseIterable {
     case dailyChange = "涨跌"
     case change5Y = "5年涨跌"
     case bottomDivergence = "底背离"
+    case yoy = "同比"
+    case qoq = "环比"
+    case roe = "ROE"
 }
 
 class StockViewModel: ObservableObject {
     @Published var stocks: [Stock] = []
     @Published var filteredStocks: [Stock] = []
+    @Published var financialUpdateStocks: [Stock] = []  // 今日财务数据更新的股票
     @Published var isLoading = false
+    @Published var isLoadingFinancialUpdates = false
     @Published var errorMessage: String?
     @Published var sortOption: SortOption = .position
     @Published var sortAscending: Bool = false
@@ -37,7 +42,8 @@ class StockViewModel: ObservableObject {
         loadFavorites()
         Task {
             await loadData()
-            await updatePrices()  // 打开app时自动更新价格
+            await updatePrices()
+            await loadFinancialUpdates()
         }
     }
 
@@ -140,6 +146,50 @@ class StockViewModel: ObservableObject {
     func refresh() async {
         await loadData()
         await updatePrices()
+        await loadFinancialUpdates()
+    }
+
+    // 加载今日财务数据有更新的股票
+    @MainActor
+    func loadFinancialUpdates() async {
+        isLoadingFinancialUpdates = true
+        errorMessage = nil
+
+        guard let url = URL(string: "\(baseURL)/financial_updates") else {
+            errorMessage = "URL错误"
+            isLoadingFinancialUpdates = false
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 60
+
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                errorMessage = "无效响应"
+                isLoadingFinancialUpdates = false
+                return
+            }
+
+            guard httpResponse.statusCode == 200 else {
+                errorMessage = "服务器错误: \(httpResponse.statusCode)"
+                isLoadingFinancialUpdates = false
+                return
+            }
+
+            let decoder = JSONDecoder()
+            let result = try decoder.decode(FinancialUpdatesResponse.self, from: data)
+            if result.code == 0, let data = result.data {
+                self.financialUpdateStocks = data.stocks ?? []
+                print("今日有 \(self.financialUpdateStocks.count) 只股票财务数据更新")
+            }
+        } catch {
+            print("财务更新加载失败: \(error)")
+        }
+
+        isLoadingFinancialUpdates = false
     }
 
     func toggleSort(_ option: SortOption) {
@@ -214,6 +264,21 @@ class StockViewModel: ObservableObject {
         case .change5Y:
             // 5年涨跌幅
             return stock.change_5y ?? 0
+        case .yoy:
+            // 净利润同比
+            guard let yoy = stock.net_profit_yoy else { return 0 }
+            let clean = yoy.replacingOccurrences(of: "%", with: "")
+            return Double(clean) ?? 0
+        case .qoq:
+            // 净利润环比
+            guard let qoq = stock.net_profit_qoq else { return 0 }
+            let clean = qoq.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
+            return Double(clean) ?? 0
+        case .roe:
+            // ROE
+            guard let roe = stock.roe else { return 0 }
+            let clean = roe.replacingOccurrences(of: "%", with: "")
+            return Double(clean) ?? 0
         }
     }
 
@@ -318,4 +383,32 @@ class StockViewModel: ObservableObject {
     var favoritedStocks: [Stock] {
         stocks.filter { favorites.contains($0.code) }
     }
+}
+
+// 财务更新API响应
+struct FinancialUpdatesResponse: Codable {
+    let code: Int
+    let data: FinancialUpdatesData?
+}
+
+struct FinancialUpdatesData: Codable {
+    let date: String?
+    let count: Int?
+    let stocks: [Stock]?
+}
+
+// 月份财务数据响应
+struct MonthFinancialResponse: Codable {
+    let code: Int
+    let data: MonthFinancialData?
+}
+
+struct MonthFinancialData: Codable {
+    let month: String?
+    let dates: [DateCountItem]
+}
+
+struct DateCountItem: Codable {
+    let date: String
+    let count: Int
 }

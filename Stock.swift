@@ -24,12 +24,27 @@ struct Stock: Identifiable, Codable {
     // 财务数据
     var net_profit_yoy: String?  // 净利润同比
     var net_profit_qoq: String?  // 净利润环比
+    var revenue: String?         // 营业收入
+    var book_value_per_share: String?  // 每股净资产
     var roe: String?             // ROE
     var sector: String?          // 所属行业板块
+    var financial_updated_at: String?  // 财务数据更新时间
 
     struct HolderData: Codable {
         var date: String?
         var holders: Int?
+    }
+
+    // 历史财务数据
+    var financial_history: [FinancialHistoryItem]?
+
+    struct FinancialHistoryItem: Codable {
+        var report_date: String?
+        var report_name: String?
+        var quarter: String?
+        var net_profit_yoy: String?
+        var net_profit_qoq: String?
+        var revenue_yoy: String?
     }
 
     struct MACDDivergence: Codable {
@@ -59,7 +74,8 @@ struct Stock: Identifiable, Codable {
         case holders_trend, change_5y, price_percentile, chip_concentration
         case macd_divergence, trend_analysis, price_position, kline
         case kline_daily, kline_weekly, kline_monthly
-        case net_profit_yoy, net_profit_qoq, roe, sector
+        case net_profit_yoy, net_profit_qoq, revenue, book_value_per_share, roe, sector
+        case financial_updated_at
     }
 
     init(from decoder: Decoder) throws {
