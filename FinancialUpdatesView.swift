@@ -10,7 +10,7 @@ struct FinancialUpdatesView: View {
     @State private var selectedDate: String = ""
     @State private var monthData: [String: Int] = [:]
     @State private var datesWithData: [String] = []
-    @State private var isCalendarExpanded = true
+    @State private var isCalendarExpanded = false
     @State private var currentSort: FinancialSortOption = .yoy
     @State private var sortAscending: Bool = false
 

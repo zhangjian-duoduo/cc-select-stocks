@@ -54,7 +54,7 @@ struct ChangesView: View {
     @State private var selectedTab = 0
     @State private var selectedDate: String = ""
     @State private var selectedMonth: String = ""
-    @State private var isCalendarExpanded = true
+    @State private var isCalendarExpanded = false
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
 

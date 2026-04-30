@@ -22,46 +22,20 @@ struct WatchListView: View {
                 List {
                     ForEach(stockViewModel.favoritedStocks) { stock in
                         NavigationLink(destination: StockDetailView(stock: stock)) {
-                            WatchListCard(stock: stock)
+                            // 使用和选股列表相同的卡片
+                            StockCard(stock: stock, sortOption: .position)
                         }
+                        .buttonStyle(PlainButtonStyle())
                         .listRowBackground(Color(hex: "1E1E1E"))
                     }
                 }
                 .listStyle(.plain)
+                .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                .listRowSeparator(.hidden)
             }
         }
         .background(Color(hex: "121212"))
         .navigationTitle("自选")
-    }
-}
-
-struct WatchListCard: View {
-    let stock: Stock
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(stock.name)
-                    .font(.headline)
-                    .foregroundColor(.white)
-                Text(stock.code)
-                    .font(.caption)
-                    .foregroundColor(.gray)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 4) {
-                Text(String(format: "¥%.2f", stock.price ?? 0))
-                    .font(.headline)
-                    .foregroundColor(.white)
-                let changePct = stock.change_pct ?? 0
-                Text(String(format: "%.2f%%", changePct))
-                    .font(.caption)
-                    .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-            }
-        }
-        .padding(.vertical, 8)
     }
 }
 

@@ -8,6 +8,14 @@ struct Stock: Identifiable, Codable {
     var change_pct: Double?
     var selected_at: String?
 
+    // 手动添加的构造函数（用于创建简单Stock对象）
+    init(code: String, name: String, price: Double?, change_pct: Double?) {
+        self.code = code
+        self.name = name
+        self.price = price
+        self.change_pct = change_pct
+    }
+
     // 额外分析数据
     var holders_trend: [HolderData]?
     var change_5y: Double?
@@ -123,6 +131,63 @@ struct StockResponse: Codable {
     let data: [Stock]?
     let message: String?
     let total: Int?
+}
+
+// 虚拟交易记录
+struct Trade: Codable, Identifiable {
+    var id: String { code + "_" + String(timeIntervalSince1970) }
+    let code: String
+    let name: String
+    var price: Double      // 成交价格
+    var quantity: Int      // 成交数量
+    var isBuy: Bool       // true=买入, false=卖出
+    var timeIntervalSince1970: TimeInterval  // 交易时间戳
+
+    var totalAmount: Double {
+        price * Double(quantity)
+    }
+
+    var date: Date {
+        Date(timeIntervalSince1970: timeIntervalSince1970)
+    }
+}
+
+// 虚拟持仓
+struct Position: Codable, Identifiable {
+    var id: String { code }
+    let code: String
+    let name: String
+    var quantity: Int          // 持有数量
+    var avgCost: Double         // 平均成本
+    var firstBuyDate: Date?    // 首次买入日期
+
+    var currentPrice: Double = 0  // 当前价格（外部设置）
+
+    // 计算实时涨跌幅（需要传入当前价格）
+    func realTimeReturnPct(_ currentPrice: Double) -> Double {
+        guard avgCost > 0, quantity > 0, currentPrice > 0 else { return 0 }
+        return (currentPrice - avgCost) / avgCost * 100
+    }
+
+    // 计算实时盈亏（需要传入当前价格）
+    func realTimePositionReturn(_ currentPrice: Double) -> Double {
+        guard currentPrice > 0, quantity > 0 else { return 0 }
+        return (currentPrice - avgCost) * Double(quantity)
+    }
+
+    var totalCost: Double {
+        avgCost * Double(quantity)
+    }
+
+    var positionReturn: Double {
+        guard currentPrice > 0, quantity > 0 else { return 0 }
+        return (currentPrice - avgCost) * Double(quantity)
+    }
+
+    var returnPct: Double {
+        guard avgCost > 0, quantity > 0 else { return 0 }
+        return (currentPrice - avgCost) / avgCost * 100
+    }
 }
 
 // 手动解析API响应 - 支持数组和对象两种格式

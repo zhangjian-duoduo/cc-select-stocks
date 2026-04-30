@@ -20,6 +20,7 @@ xcuserdata/
 .DS_Store
 .AppleDouble
 .LSOverride
+._*
 
 # Python
 __pycache__/
@@ -38,6 +39,10 @@ venv.bak/
 *.swp
 *.swo
 *~
+
+# Backup
+backup/
+*.sql
 
 # Misc
 *.log

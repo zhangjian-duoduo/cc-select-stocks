@@ -245,6 +245,8 @@ struct FilterView: View {
                         filteredCount = result.data?.count ?? 0
                         stockViewModel.stocks = result.data ?? []
                         stockViewModel.applySort()
+                        // 保存筛选条件，以便刷新后自动应用
+                        stockViewModel.activeFilters = Set(filters)
                     }
                 }
             } catch {

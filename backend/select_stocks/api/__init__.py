@@ -151,7 +151,8 @@ def filter_stocks():
         cursor.execute("""
             SELECT s.code, s.name, s.price, s.change_pct, s.selected_at,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
-                   a.macd_divergence, a.trend_analysis, a.price_position
+                   a.macd_divergence, a.trend_analysis, a.price_position,
+                   a.roe, a.net_profit_yoy, a.net_profit_qoq
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
         """)
@@ -944,7 +945,7 @@ def refresh_stocks():
         analyzer = TechnicalAnalyzer(df)
 
         # 执行选股
-        selected_stocks = selector.select_stocks(limit=5000)
+        selected_stocks = selector.select_stocks(limit=6000)
 
         if not selected_stocks:
             return jsonify({'code': 1, 'message': '选股失败'})

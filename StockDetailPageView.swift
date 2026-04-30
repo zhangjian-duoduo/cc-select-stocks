@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UIKit
 
 struct StockDetailPageView: View {
     let currentIndex: Int
@@ -19,6 +20,27 @@ struct StockDetailPageView: View {
         case daily = "日"
         case weekly = "周"
         case monthly = "月"
+    }
+
+    // 打开东方财富App
+    func openInEastMoney(code: String) {
+        guard code.count == 6 else { return }
+        let prefix = code.hasPrefix("6") ? "SH" : "SZ"
+        let symbol = "\(prefix)\(code)"
+
+        // 先尝试打开东方财富App
+        if let appUrl = URL(string: "eastmoney://quote?symbol=\(symbol)") {
+            if UIApplication.shared.canOpenURL(appUrl) {
+                UIApplication.shared.open(appUrl)
+                return
+            }
+        }
+
+        // App没安装就用网页版
+        let webUrlString = "https://quote.eastmoney.com/\(symbol.lowercased()).html"
+        if let webUrl = URL(string: webUrlString) {
+            UIApplication.shared.open(webUrl)
+        }
     }
 
     var body: some View {
@@ -121,19 +143,88 @@ struct StockDetailContent: View {
     let loadFinancialHistory: (String) -> Void
 
     @State private var isLoading = false
+    @State private var showTradeSheet = false
+    @State private var tradeQuantity = ""
+    @State private var selectedTradeAction = 0  // 0=买入, 1=卖出
+
+    // 打开东方财富App
+    func openInEastMoney() {
+        let code = stock.code ?? ""
+        guard code.count == 6 else { return }
+
+        // 市场代码：沪市=1，深市=0
+        let marketPrefix = code.hasPrefix("6") || code.hasPrefix("9") || code.hasPrefix("688") ? "1" : "0"
+        let secId = "\(marketPrefix).\(code)"
+
+        // 尝试多种URL Scheme格式
+        let schemes: [String] = [
+            // 使用secid格式（来自东方财富API的格式）
+            "eastmoney://quote?secid=\(secId)",
+            "eastmoney://quotation?secid=\(secId)",
+            "eastmoney://stockdetail?secid=\(secId)",
+            "eastmoney://hq?secid=\(secId)",
+
+            // 备用格式
+            "eastmoney://stock?secid=\(secId)",
+            "emstock://quote?secid=\(secId)"
+        ]
+
+        for scheme in schemes {
+            if let url = URL(string: scheme) {
+                if UIApplication.shared.canOpenURL(url) {
+                    UIApplication.shared.open(url)
+                    return
+                }
+            }
+        }
+
+        // 如果App没安装，尝试网页版
+        let prefix = code.hasPrefix("6") ? "sh" : "sz"
+        let webCode = "\(prefix)\(code)"
+        if let webUrl = URL(string: "https://quote.eastmoney.com/\(webCode).html") {
+            UIApplication.shared.open(webUrl)
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
                 // 股票基本信息（板块）
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(stock.name)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    Text(stock.code)
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
+                    Button {
+                        openInEastMoney()
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(stock.name)
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.white)
+                            Image(systemName: "arrow.up.forward.square")
+                                .font(.caption)
+                                .foregroundColor(Color(hex: "1E88E5"))
+                        }
+                    }
+                    HStack {
+                        Text(stock.code)
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Spacer()
+                        // 模拟交易按钮
+                        Button {
+                            showTradeSheet = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "cart.fill.badge.plus")
+                                Text("买入")
+                            }
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color(hex: "4CAF50"))
+                            .cornerRadius(6)
+                        }
+                    }
                     if let sector = stock.sector, !sector.isEmpty {
                         Text(sector)
                             .font(.caption)
@@ -201,6 +292,14 @@ struct StockDetailContent: View {
         .onAppear {
             loadDetail()
             loadFinancialHistory(stock.code)
+        }
+        .sheet(isPresented: $showTradeSheet) {
+            TradeSheetView(
+                stock: stock,
+                isPresented: $showTradeSheet,
+                selectedAction: $selectedTradeAction,
+                quantity: $tradeQuantity
+            )
         }
     }
 

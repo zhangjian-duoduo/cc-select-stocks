@@ -47,49 +47,187 @@ def is_last_trading_day_of_month():
     return (today.day >= last_day.day - 3) and today.weekday() < 5
 
 def update_daily_kline():
-    """更新日K线数据（并行优化版）"""
+    """更新日K线数据（优化版：只更新缺失的）"""
     print("[定时任务] 开始更新日K线数据...")
     import sys
     sys.path.insert(0, '/root/select_stocks')
-    from kline_manager import update_today_kline
-
-    # 只更新日K
     from kline_manager import fetch_kline_data, save_kline_to_db, get_all_stock_codes, get_db
+    from datetime import datetime, timedelta
+
+    today = datetime.now().strftime('%Y-%m-%d')
 
     conn = get_db()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
+        # 获取已有今天数据的股票
+        cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'daily' AND date = %s", (today,))
+        existing_today = set(row['code'] for row in cursor.fetchall())
+
+        # 获取所有需要更新的股票
         cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'daily'")
-        stocks = [row['code'] for row in cursor.fetchall()]
-        print(f"[定时任务] 共 {len(stocks)} 只股票需要更新")
+        all_stocks = [row['code'] for row in cursor.fetchall()]
+
+        # 只取缺失今天数据的股票
+        stocks = [s for s in all_stocks if s not in existing_today]
+        print(f"[定时任务] 今日已有 {len(existing_today)} 只，需要更新 {len(stocks)} 只")
+
+        if not stocks:
+            print("[定时任务] 今日数据已完整")
+            return
 
         updated = [0]
         lock = threading.Lock()
 
         def update_one(code):
             try:
-                time.sleep(0.1)  # 缩短间隔，避免被API限流
+                time.sleep(0.5)  # 增加间隔，避免被API限流（10次/秒以内）
                 df = fetch_kline_data(code, 'daily')
                 if df is not None and not df.empty:
                     latest = df.tail(1)
                     save_kline_to_db(latest, code, 'daily')
                 with lock:
                     updated[0] += 1
-                    if updated[0] % 200 == 0:
+                    if updated[0] % 100 == 0:
                         print(f"[定时任务] 已更新 {updated[0]}/{len(stocks)}")
                 return True
             except Exception as e:
+                with lock:
+                    updated[0] += 1
                 return False
 
-        # 并行处理 - 15个线程
-        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        # 并行处理 - 5个线程，每线程0.5秒 = 10次/秒（刚好达到限制）
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
             list(executor.map(update_one, stocks))
 
         print(f"[定时任务] 日K线更新完成，共更新 {updated[0]} 只")
     finally:
         cursor.close()
         conn.close()
+
+def update_all_financial_data():
+    """更新所有A股财务数据（增量更新：只更新财报超过30天的）"""
+    print("[财务全量] 开始更新A股财务数据（增量）...")
+    import sys
+    sys.path.insert(0, '/root/select_stocks')
+    import akshare as ak
+    import pandas as pd
+    import random
+    import time
+    import concurrent.futures
+    from datetime import datetime, timedelta
+
+    DB_CONFIG = {
+        'host': 'localhost',
+        'user': 'root',
+        'password': '',
+        'database': 'select_stocks',
+        'charset': 'utf8mb4'
+    }
+
+    def get_db():
+        return pymysql.connect(**DB_CONFIG)
+
+    # 获取所有股票代码
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT code FROM stock_kline")
+    stock_codes = [row[0] for row in cursor.fetchall()]
+    cursor.close()
+    conn.close()
+
+    print(f"[财务全量] 共 {len(stock_codes)} 只股票需要更新财务数据")
+
+    def fetch_and_save(code):
+        """获取并保存单只股票的财务数据"""
+        try:
+            time.sleep(random.uniform(0.05, 0.15))  # 间隔，避免被API限流
+
+            # 获取财务数据
+            fin_df = ak.stock_financial_abstract_new_ths(symbol=code)
+            if fin_df is None or len(fin_df) == 0:
+                return None
+
+            # 获取净利润数据
+            net_profit_df = fin_df[fin_df['metric_name'] == 'parent_holder_net_profit'].copy()
+            if len(net_profit_df) == 0:
+                return None
+
+            net_profit_df = net_profit_df.sort_values('report_date', ascending=False)
+            row = net_profit_df.iloc[0]
+
+            report_date = row['report_date']
+            report_name = row.get('report_name', '')
+
+            yoy = row.get('single_yoy')
+            mom = row.get('mom')
+
+            yoy_str = f"{float(yoy) * 100:.2f}%" if pd.notna(yoy) else ''
+            mom_str = f"{float(mom) * 100:.1f}%" if pd.notna(mom) else ''
+
+            # 获取营收数据
+            revenue_df = fin_df[fin_df['metric_name'] == 'operating_income_total']
+            revenue_yoy_str = ''
+            if len(revenue_df) > 0:
+                revenue_row = revenue_df[revenue_df['report_date'] == report_date]
+                if len(revenue_row) > 0:
+                    rev_yoy = revenue_row.iloc[0].get('single_yoy')
+                    if pd.notna(rev_yoy):
+                        revenue_yoy_str = f"{float(rev_yoy) * 100:.2f}%"
+
+            # 获取ROE
+            roe_str = ''
+            roe_df = fin_df[fin_df['metric_name'] == 'index_full_diluted_roe']
+            if len(roe_df) > 0:
+                roe_df = roe_df.sort_values('report_date', ascending=False)
+                roe = roe_df.iloc[0]
+                if pd.notna(roe.get('value')):
+                    roe_str = str(round(float(roe['value']), 2))
+
+            return {
+                'code': code,
+                'report_date': report_date,
+                'report_name': report_name,
+                'net_profit_yoy': yoy_str,
+                'net_profit_qoq': mom_str,
+                'revenue_yoy': revenue_yoy_str,
+                'roe': roe_str
+            }
+        except Exception as e:
+            return None
+
+    # 并行获取财务数据（5个线程）
+    success = [0]
+    lock = threading.Lock()
+
+    def process_stock(code):
+        result = fetch_and_save(code)
+        if result:
+            try:
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("""
+                    REPLACE INTO stock_financial_history
+                    (code, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, roe, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                """, (result['code'], result['report_date'], result['report_name'],
+                      result['net_profit_yoy'], result['net_profit_qoq'],
+                      result['revenue_yoy'], result.get('roe', '')))
+                conn.commit()
+                cursor.close()
+                conn.close()
+                with lock:
+                    success[0] += 1
+                return True
+            except:
+                return False
+        return False
+
+    print("[财务全量] 开始获取财务数据...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(process_stock, stock_codes))
+
+    print(f"[财务全量] 财务数据更新完成，共更新 {success[0]} 只股票")
 
 def update_weekly_kline():
     """更新周K线数据（并行优化版）"""
@@ -182,26 +320,30 @@ def run_stock_selection():
 
     # 保存到数据库
     conn = get_db()
-    cursor = conn.cursor()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
         # 获取上一个有数据的日期（从stock_history表读取）
         cursor.execute("""
-            SELECT DATE_FORMAT(selected_at, '%%Y-%%m-%%d') as dt
+            SELECT MAX(selected_at) as dt
             FROM stock_history
-            GROUP BY DATE_FORMAT(selected_at, '%%Y-%%m-%%d')
-            ORDER BY MAX(selected_at) DESC
             LIMIT 1
         """)
         prev_row = cursor.fetchone()
-        prev_date = prev_row['dt'] if prev_row else None
+        prev_date = prev_row['dt'].strftime('%Y-%m-%d') if prev_row and prev_row['dt'] else None
 
         yesterday_stocks = {}
         if prev_date:
             cursor.execute("SELECT code, name FROM stock_history WHERE selected_at = %s", (prev_date,))
-            yesterday_stocks = {row[0]: {'name': row[1]} for row in cursor.fetchall()}
+            yesterday_stocks = {row['code']: {'name': row['name']} for row in cursor.fetchall()}
 
-        today = datetime.now().strftime('%Y-%m-%d')
+        # 9点前用昨天，9点后用今天
+        now = datetime.now()
+        if now.hour < 9:
+            from datetime import timedelta
+            today = (now - timedelta(days=1)).strftime('%Y-%m-%d')
+        else:
+            today = now.strftime('%Y-%m-%d')
 
         # 保存被剔除的股票
         for code, info in yesterday_stocks.items():
@@ -274,7 +416,7 @@ def update_analysis(update_financial=False):
 
         # 批量获取所有股票的财务数据
         cursor.execute("""
-            SELECT code, report_date, report_name, net_profit_yoy, net_profit_qoq
+            SELECT code, report_date, report_name, net_profit_yoy, net_profit_qoq, roe
             FROM stock_financial_history
             WHERE (code, report_date) IN (
                 SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
@@ -284,7 +426,7 @@ def update_analysis(update_financial=False):
             financial_data_cache[row['code']] = {
                 'net_profit_yoy': row['net_profit_yoy'] or '',
                 'net_profit_qoq': row['net_profit_qoq'] or '',
-                'roe': '',  # ROE需要从其他地方获取
+                'roe': row['roe'] or '',
                 'revenue': '',
                 'book_value_per_share': ''
             }
@@ -336,48 +478,88 @@ def update_analysis(update_financial=False):
 
         # 串行更新数据库（保持稳定性）
         updated = 0
-        for code in stock_codes:
-            try:
-                analysis = analyzer.analyze_stock(code)
-                financial_data = financial_data_cache.get(code, {})
 
-                # 先删除旧数据
-                cursor.execute("DELETE FROM stock_analysis WHERE code=%s", (code,))
+        # 使用3个线程并行处理
+        import concurrent.futures
 
-                # 转换numpy类型
-                change_5y = convert_numpy(analysis.get('change_5y'), 0)
-                price_percentile = convert_numpy(analysis.get('price_percentile'), 50)
-                chip_concentration = convert_numpy(analysis.get('chip_concentration'), 0.5)
-                price_position = convert_numpy(analysis.get('price_position'), 0.5)
+        def update_one(code):
+            # 带超时和重试的分析
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    # 设置60秒超时
+                    import signal
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("分析超时")
 
-                cursor.execute("""
-                    INSERT INTO stock_analysis
-                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position, net_profit_yoy, net_profit_qoq, revenue, book_value_per_share, roe, sector, financial_updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                """, (
-                    code,
-                    json.dumps(analysis.get('holders_trend', [])),
-                    change_5y,
-                    price_percentile,
-                    chip_concentration,
-                    json.dumps(analysis.get('macd_divergence', {})),
-                    json.dumps(analysis.get('trend_analysis', {})),
-                    price_position,
-                    financial_data.get('net_profit_yoy', ''),
-                    financial_data.get('net_profit_qoq', ''),
-                    financial_data.get('revenue', ''),
-                    financial_data.get('book_value_per_share', ''),
-                    financial_data.get('roe', ''),
-                    analysis.get('sector', '')
-                ))
-                updated += 1
+                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(60)  # 60秒超时
 
-                if updated % 100 == 0:
-                    conn.commit()
-                    print(f"[定时任务] 已更新 {updated} 只股票")
-            except Exception as e:
-                print(f"[定时任务] {code} 分析失败: {e}")
-                continue
+                    try:
+                        analysis = analyzer.analyze_stock(code)
+                    finally:
+                        signal.alarm(0)
+                        signal.signal(signal.SIGALRM, old_handler)
+
+                    financial_data = financial_data_cache.get(code, {})
+
+                    with get_db() as conn2:
+                        cursor2 = conn2.cursor(pymysql.cursors.DictCursor)
+                        try:
+                            cursor2.execute("DELETE FROM stock_analysis WHERE code=%s", (code,))
+
+                            change_5y = convert_numpy(analysis.get('change_5y'), 0)
+                            price_percentile = convert_numpy(analysis.get('price_percentile'), 50)
+                            chip_concentration = convert_numpy(analysis.get('chip_concentration'), 0.5)
+                            price_position = convert_numpy(analysis.get('price_position'), 0.5)
+
+                            cursor2.execute("""
+                                INSERT INTO stock_analysis
+                                (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position, net_profit_yoy, net_profit_qoq, revenue, book_value_per_share, roe, sector, financial_updated_at)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                            """, (
+                                code,
+                                json.dumps(analysis.get('holders_trend', [])),
+                                change_5y,
+                                price_percentile,
+                                chip_concentration,
+                                json.dumps(analysis.get('macd_divergence', {})),
+                                json.dumps(analysis.get('trend_analysis', {})),
+                                price_position,
+                                financial_data.get('net_profit_yoy', ''),
+                                financial_data.get('net_profit_qoq', ''),
+                                financial_data.get('revenue', ''),
+                                financial_data.get('book_value_per_share', ''),
+                                financial_data.get('roe', ''),
+                                financial_data.get('sector', '')
+                            ))
+                            conn2.commit()
+                        finally:
+                            cursor2.close()
+                    return True
+
+                except TimeoutError as e:
+                    print(f"分析超时 {code} (尝试 {attempt + 1}/{max_retries}): {e}")
+                    if attempt == max_retries - 1:
+                        # 超时后使用默认空数据
+                        analysis = {
+                            'change_5y': 0, 'price_percentile': 50,
+                            'chip_concentration': 0.5, 'price_position': 0.5,
+                            'holders_trend': [], 'macd_divergence': {},
+                            'trend_analysis': {}
+                        }
+                        financial_data = financial_data_cache.get(code, {})
+                        continue  # 继续执行保存
+                    else:
+                        import time
+                        time.sleep(1)  # 等待1秒后重试
+                except Exception as e:
+                    print(f"分析失败 {code}: {e}")
+                    return False
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(update_one, stock_codes))
+            updated = sum(1 for r in results if r)
 
         conn.commit()
         print(f"[定时任务] 分析数据更新完成，共更新 {updated} 只股票")
@@ -582,38 +764,64 @@ def get_financial_data(code):
     return get_financial_data_fast(code)
 
 def daily_task():
-    """每日下午4点执行的任务"""
-    print("=" * 50)
-    print("[每日任务] 开始执行...")
-    print("=" * 50)
+    """每日0点执行的任务"""
+    import os
 
-    # 1. 更新日K线
+    # 检查是否有其他daily_task在运行，避免重复执行
+    pid_file = '/tmp/daily_task.lock'
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file, 'r') as f:
+                old_pid = int(f.read().strip())
+            # 检查进程是否还活着
+            if os.path.exists(f'/proc/{old_pid}'):
+                print("[每日任务] 上一次任务还在运行中，跳过本次执行")
+                return
+        except:
+            pass
+
+    # 写入当前进程PID
+    with open(pid_file, 'w') as f:
+        f.write(str(os.getpid()))
+
     try:
-        update_daily_kline()
-    except Exception as e:
-        print(f"[每日任务] 日K线更新失败: {e}")
+        print("=" * 50)
+        print("[每日任务] 开始执行...")
+        print("=" * 50)
 
-    # 2. 运行选股
-    try:
-        run_stock_selection()
-    except Exception as e:
-        print(f"[每日任务] 选股失败: {e}")
+        # 1. 更新日K线
+        try:
+            update_daily_kline()
+        except Exception as e:
+            print(f"[每日任务] 日K线更新失败: {e}")
 
-    # # 3. 增量更新所有A股财务数据（必须在分析之前执行，这样分析才能用到最新财务数据）
-    # try:
-    #     update_all_financial_data()
-    # except Exception as e:
-    #     print(f"[每日任务] 财务数据更新失败: {e}")
+        # 2. 运行选股
+        try:
+            run_stock_selection()
+        except Exception as e:
+            print(f"[每日任务] 选股失败: {e}")
 
-    # 3. 更新分析数据（每小时增量更新已覆盖财务数据，此处不再重复更新）
-    try:
-        update_analysis()
-    except Exception as e:
-        print(f"[每日任务] 分析数据更新失败: {e}")
+        # 3. 更新所有A股财务数据（必须在分析之前执行）
+        try:
+            update_all_financial_data()
+        except Exception as e:
+            print(f"[每日任务] 财务数据更新失败: {e}")
 
-    print("=" * 50)
-    print("[每日任务] 执行完成!")
-    print("=" * 50)
+        # 4. 更新分析数据
+        try:
+            update_analysis()
+        except Exception as e:
+            print(f"[每日任务] 分析数据更新失败: {e}")
+
+        print("=" * 50)
+        print("[每日任务] 执行完成!")
+        print("=" * 50)
+    finally:
+        # 清理锁文件
+        try:
+            os.remove(pid_file)
+        except:
+            pass
 
 
 def update_incremental_financial():
@@ -648,8 +856,9 @@ def update_incremental_financial():
             print("[增量财务] 今日无新公告")
             return
 
-        # 过滤财报相关公告关键词
-        financial_keywords = ['净利润', '利润', '业绩预告', '业绩预增', '业绩预减', '扭亏', '盈利']
+        # 过滤财报相关公告关键词 - 更严格的过滤
+        # 只保留真正的财报公告：年度报告、季度报告、业绩预告、业绩快报
+        financial_keywords = ['年度报告', '年度报告正文', '季度报告', '业绩预告', '业绩快报', '业绩预增', '业绩预减', '扭亏', '年报', '一季报', '中报', '三季报', '年报摘要']
         df_financial = df[df['公告标题'].apply(
             lambda x: any(kw in str(x) for kw in financial_keywords) if pd.notna(x) else False
         )]
@@ -729,140 +938,6 @@ def update_incremental_financial():
 
     except Exception as e:
         print(f"[增量财务] 出错: {e}")
-    print("[定时任务] 开始更新财务数据...")
-    import sys
-    sys.path.insert(0, '/root/select_stocks')
-    import pymysql
-    import akshare as ak
-    import pandas as pd
-    import concurrent.futures
-    import time
-    import random
-
-    DB_CONFIG = {
-        'host': 'localhost',
-        'user': 'root',
-        'password': '',
-        'database': 'select_stocks',
-        'charset': 'utf8mb4'
-    }
-
-    def get_db():
-        return pymysql.connect(**DB_CONFIG)
-
-    def get_all_stock_codes():
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT code FROM stock_kline")
-        codes = [row[0] for row in cursor.fetchall()]
-        cursor.close()
-        conn.close()
-        return codes
-
-    def fetch_latest_financial(code):
-        try:
-            time.sleep(random.uniform(0.05, 0.08))
-            df = ak.stock_financial_abstract_new_ths(symbol=code)
-            if df is None or len(df) == 0:
-                return None
-
-            net_profit_df = df[df['metric_name'] == 'parent_holder_net_profit'].copy()
-            if len(net_profit_df) == 0:
-                return None
-
-            net_profit_df = net_profit_df.sort_values('report_date', ascending=False)
-            row = net_profit_df.iloc[0]
-
-            report_date = row['report_date']
-            report_name = row.get('report_name', '')
-
-            yoy = row.get('single_yoy')
-            mom = row.get('mom')
-
-            yoy_str = f"{float(yoy) * 100:.2f}%" if pd.notna(yoy) else ''
-            mom_str = f"{float(mom) * 100:.1f}%" if pd.notna(mom) else ''
-
-            revenue_df = df[df['metric_name'] == 'operating_income_total']
-            revenue_yoy_str = ''
-            if len(revenue_df) > 0:
-                revenue_row = revenue_df[revenue_df['report_date'] == report_date]
-                if len(revenue_row) > 0:
-                    rev_yoy = revenue_row.iloc[0].get('single_yoy')
-                    if pd.notna(rev_yoy):
-                        revenue_yoy_str = f"{float(rev_yoy) * 100:.2f}%"
-
-            # 获取ROE
-            roe_str = ''
-            roe_df = df[df['metric_name'] == 'index_full_diluted_roe']
-            if len(roe_df) > 0:
-                roe_df = roe_df.sort_values('report_date', ascending=False)
-                roe = roe_df.iloc[0]
-                if pd.notna(roe.get('value')):
-                    roe_str = str(round(float(roe['value']), 2))
-
-            return {
-                'code': code,
-                'report_date': report_date,
-                'report_name': report_name,
-                'net_profit_yoy': yoy_str,
-                'net_profit_qoq': mom_str,
-                'revenue_yoy': revenue_yoy_str,
-                'roe': roe_str
-            }
-        except:
-            return None
-
-    def save_to_db(data):
-        if not data:
-            return False
-        from datetime import datetime
-        conn = get_db()
-        cursor = conn.cursor()
-        today = datetime.now().strftime('%Y-%m-%d')
-        try:
-            # 保存到财务历史表
-            cursor.execute("""
-                REPLACE INTO stock_financial_history
-                (code, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, roe, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            """, (data['code'], data['report_date'], data['report_name'],
-                  data['net_profit_yoy'], data['net_profit_qoq'], data['revenue_yoy'], data.get('roe', '')))
-
-            # 同时保存到每日财务更新表（供App财务更新页面使用）
-            cursor.execute("""
-                INSERT IGNORE INTO daily_financial_updates
-                (code, name, report_date, report_name, net_profit_yoy, net_profit_qoq, revenue_yoy, updated_date)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (data['code'], data.get('name', ''), data['report_date'], data['report_name'],
-                  data['net_profit_yoy'], data['net_profit_qoq'], data['revenue_yoy'], today))
-
-            conn.commit()
-            return True
-        except Exception as e:
-            print(f"保存失败: {e}")
-            conn.rollback()
-            return False
-        finally:
-            cursor.close()
-            conn.close()
-
-    def process_stock(code):
-        data = fetch_latest_financial(code)
-        if data:
-            return save_to_db(data)
-        return False
-
-    codes = get_all_stock_codes()
-    print(f"[定时任务] 共 {len(codes)} 只股票需要更新财务数据")
-
-    success = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        results = executor.map(process_stock, codes)
-        for ok in results:
-            if ok:
-                success += 1
-
-    print(f"[定时任务] 财务数据更新完成: {success}/{len(codes)}")
 
 def weekly_task():
     """每周最后一个交易日下午4点执行"""
@@ -940,11 +1015,11 @@ def start_scheduler():
     """启动定时任务调度器"""
     scheduler = BackgroundScheduler()
 
-    # 每日下午4点执行
+    # 每日0点执行
     scheduler.add_job(daily_task, 'cron', hour=16, minute=0, id='daily_task')
 
-    # 每小时增量更新财务数据
-    scheduler.add_job(update_incremental_financial, 'interval', hours=1, id='incremental_financial')
+    # # 每小时增量更新财务数据（已禁用）
+    # scheduler.add_job(update_incremental_financial, 'interval', hours=1, id='incremental_financial')
 
     # 每周五晚上7点执行（检查是否为最后交易日）
     scheduler.add_job(weekly_task, 'cron', hour=19, minute=0, day_of_week='fri', id='weekly_task')
@@ -953,11 +1028,10 @@ def start_scheduler():
     scheduler.add_job(monthly_task, 'cron', hour=22, minute=0, day='28-31', id='monthly_task')
 
     scheduler.start()
-    # 启动时立即执行一次增量财务更新
-    update_incremental_financial()
+    # 启动时不再执行增量财务更新（改为每天16点更新全部）
+    # update_incremental_financial()
     print("[调度器] 定时任务已启动")
-    print("  - 每小时: 增量更新今日发布财报的股票")
-    print("  - 每日16:00: 更新日K + 选股 + 分析")
+    print("  - 每日0点: 更新日K + 选股 + 全量财务数据 + 分析")
     print("  - 每周五19:00: 更新周K + 选股 + 分析")
     print("  - 每月末22:00: 更新月K + 选股 + 分析")
 

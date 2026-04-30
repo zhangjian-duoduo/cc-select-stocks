@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UIKit
 
 struct StockListView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
@@ -296,6 +297,18 @@ struct StockCard: View {
                     Text("环比")
                         .font(.system(size: 9))
                         .foregroundColor(.gray)
+                }
+
+                // 自选收益率（仅在自选股票中显示）
+                if let returnPct = stockViewModel.calculateFavoriteReturn(stock.code) {
+                    VStack(spacing: 0) {
+                        Text(String(format: "%@%.1f%%", returnPct >= 0 ? "+" : "", returnPct))
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundColor(returnPct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                        Text("自选")
+                            .font(.system(size: 9))
+                            .foregroundColor(.gray)
+                    }
                 }
             }
         }
@@ -636,6 +649,31 @@ struct StockDetailView: View {
         case monthly = "月"
     }
 
+    // 打开东方财富App
+    func openInEastMoney() {
+        let code = stock.code ?? ""
+        guard code.count == 6 else { return }
+
+        // 转换股票代码格式：6开头是沪市，其他是深市
+        let prefix = code.hasPrefix("6") ? "SH" : "SZ"
+        let symbol = "\(prefix)\(code)"
+
+        // 先尝试打开东方财富App
+        if let appUrl = URL(string: "eastmoney://quote?symbol=\(symbol)") {
+            // 检查是否能打开App
+            if UIApplication.shared.canOpenURL(appUrl) {
+                UIApplication.shared.open(appUrl)
+                return
+            }
+        }
+
+        // App没安装就用网页版
+        let webUrlString = "https://quote.eastmoney.com/\(symbol.lowercased()).html"
+        if let webUrl = URL(string: webUrlString) {
+            UIApplication.shared.open(webUrl)
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
@@ -643,10 +681,20 @@ struct StockDetailView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
                         VStack(alignment: .leading) {
-                            Text(stock.name)
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(.white)
+                            // 点击股票名称跳转到东方财富
+                            Button {
+                                openInEastMoney()
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Text(stock.name)
+                                        .font(.title2)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.white)
+                                    Image(systemName: "arrow.up.forward.square")
+                                        .font(.caption)
+                                        .foregroundColor(Color(hex: "1E88E5"))
+                                }
+                            }
                             Text(stock.code)
                                 .font(.subheadline)
                                 .foregroundColor(.gray)

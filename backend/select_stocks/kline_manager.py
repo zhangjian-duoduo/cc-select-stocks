@@ -2,15 +2,24 @@
 # -*- coding: utf-8 -*-
 """
 K线数据模块 - 存储所有A股历史K线数据
+支持双平台：baostock(优先) + akshare(备用)
 """
 
 import baostock as bs
+try:
+    import akshare as ak
+except ImportError:
+    ak = None
 import pymysql
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Optional
 import time
 import os
+import socket
+
+# 设置网络超时
+socket.setdefaulttimeout(10)
 
 # 数据库配置
 DB_CONFIG = {
@@ -102,74 +111,158 @@ def get_all_stock_codes() -> list:
 
 def fetch_kline_data(stock_code: str, period: str = 'daily', latest_only: bool = False) -> Optional[pd.DataFrame]:
     """获取单只股票的K线数据
+    双平台：baostock(优先) → akshare(备用)
     latest_only: True=只获取最新数据, False=获取全部历史数据
     """
-    lg = bs.login()
-    if lg.error_code != '0':
+    import sys
+
+    # 先尝试baostock
+    try:
+        result = _fetch_baostock(stock_code, period, latest_only)
+        if result is not None and not result.empty:
+            sys.stdout.flush()
+            return result
+    except Exception as e:
+        print(f"  [baostock] 获取失败: {e}", flush=True)
+
+    # baostock失败，尝试akshare
+    try:
+        result = fetch_kline_akshare(stock_code, period)
+        if result is not None and not result.empty:
+            print(f"  → 使用akshare备用", flush=True)
+            return result
+    except Exception as e:
+        print(f"  [akshare] 也失败: {e}", flush=True)
+
+    return None
+
+def _fetch_baostock(stock_code: str, period: str, latest_only: bool) -> Optional[pd.DataFrame]:
+    """baostock获取K线数据"""
+    try:
+        lg = bs.login()
+        if lg.error_code != '0':
+            return None
+
+        # 转换周期
+        frequency_map = {
+            'daily': 'd',
+            'weekly': 'w',
+            'monthly': 'm'
+        }
+        frequency = frequency_map.get(period, 'd')
+
+        # 6开头是上海，0/3开头是深圳
+        bs_code = f'sh.{stock_code}' if stock_code.startswith('6') else f'sz.{stock_code}'
+
+        # 根据参数决定获取多少数据
+        if latest_only:
+            # 只需要最新数据 - 快速获取
+            if period == 'daily':
+                start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+            elif period == 'weekly':
+                start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+            else:  # monthly
+                start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+        else:
+            # 获取全部历史数据
+            start_date = '1990-01-01'
+
+        end_date = datetime.now().strftime('%Y-%m-%d')
+
+        rs = bs.query_history_k_data_plus(
+            bs_code,
+            "date,code,open,high,low,close,volume,amount",
+            start_date=start_date,
+            end_date=end_date,
+            frequency=frequency,
+            adjustflag="2"  # 前复权
+        )
+
+        data_list = []
+        while rs.error_code == '0' and rs.next():
+            data_list.append(rs.get_row_data())
+
+        bs.logout()
+
+        if not data_list:
+            return None
+
+        df = pd.DataFrame(data_list, columns=['date', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
+
+        # 过滤无效数据
+        df = df[df['close'].notna() & (df['close'] != '')]
+        if df.empty:
+            return None
+
+        # 转换数据类型
+        for col in ['open', 'high', 'low', 'close']:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
+        df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
+
+        df['period'] = period
+
+        return df
+    except Exception as e:
+        try:
+            bs.logout()
+        except:
+            pass
         return None
 
-    # 转换周期
-    frequency_map = {
-        'daily': 'd',
-        'weekly': 'w',
-        'monthly': 'm'
-    }
-    frequency = frequency_map.get(period, 'd')
+def fetch_kline_akshare(stock_code: str, period: str = 'daily') -> Optional[pd.DataFrame]:
+    """通过akshare获取K线数据（备用平台）"""
+    if ak is None:
+        return None
 
-    # 6开头是上海，0/3开头是深圳
-    bs_code = f'sh.{stock_code}' if stock_code.startswith('6') else f'sz.{stock_code}'
+    try:
+        # 转换代码格式: 600000 -> sh.600000
+        if stock_code.startswith('6'):
+            code = f"sh{stock_code}"
+        else:
+            code = f"sz{stock_code}"
 
-    # 根据参数决定获取多少数据
-    if latest_only:
-        # 只需要最新数据 - 快速获取
+        # 获取数据
         if period == 'daily':
-            start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
+            df = ak.stock_zh_a_hist(symbol=code, period="daily",
+                                   start_date=(datetime.now() - timedelta(days=30)).strftime('%Y%m%d'),
+                                   end_date=datetime.now().strftime('%Y%m%d'),
+                                   adjust="qfq")
         elif period == 'weekly':
-            start_date = (datetime.now() - timedelta(days=60)).strftime('%Y-%m-%d')
+            df = ak.stock_zh_a_hist(symbol=code, period="weekly",
+                                    start_date=(datetime.now() - timedelta(days=180)).strftime('%Y%m%d'),
+                                    end_date=datetime.now().strftime('%Y%m%d'),
+                                    adjust="qfq")
         else:  # monthly
-            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
-    else:
-        # 获取全部历史数据
-        start_date = '1990-01-01'
+            df = ak.stock_zh_a_hist(symbol=code, period="monthly",
+                                    start_date=(datetime.now() - timedelta(days=365)).strftime('%Y%m%d'),
+                                    end_date=datetime.now().strftime('%Y%m%d'),
+                                    adjust="qfq")
 
-    end_date = datetime.now().strftime('%Y-%m-%d')
+        if df is None or df.empty:
+            return None
 
-    rs = bs.query_history_k_data_plus(
-        bs_code,
-        "date,code,open,high,low,close,volume,amount",
-        start_date=start_date,
-        end_date=end_date,
-        frequency=frequency,
-        adjustflag="2"  # 前复权
-    )
+        # 转换列名
+        df = df.rename(columns={
+            '日期': 'date',
+            '代码': 'code',
+            '开盘': 'open',
+            '最高': 'high',
+            '最低': 'low',
+            '收盘': 'close',
+            '成交量': 'volume',
+            '成交额': 'amount'
+        })
 
-    data_list = []
-    while rs.error_code == '0' and rs.next():
-        data_list.append(rs.get_row_data())
+        df = df[['date', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount']]
+        df['period'] = period
 
-    bs.logout()
-
-    if not data_list:
+        return df
+    except Exception as e:
+        print(f"  [akshare] 获取失败: {e}")
         return None
 
-    df = pd.DataFrame(data_list, columns=['date', 'code', 'open', 'high', 'low', 'close', 'volume', 'amount'])
-
-    # 过滤无效数据
-    df = df[df['close'].notna() & (df['close'] != '')]
-    if df.empty:
-        return None
-
-    # 转换数据类型
-    for col in ['open', 'high', 'low', 'close']:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-    df['amount'] = pd.to_numeric(df['amount'], errors='coerce')
-
-    df['period'] = period
-
-    return df
-
-def save_kline_to_db(df: pd.DataFrame, stock_code: str, period: str) -> int:
+def save_kline_to_db(df: pd.DataFrame, stock_code: str, period: str, retry: int = 3) -> int:
     """保存K线数据到数据库"""
     if df is None or df.empty:
         return 0
@@ -178,41 +271,49 @@ def save_kline_to_db(df: pd.DataFrame, stock_code: str, period: str) -> int:
     cursor = conn.cursor()
 
     saved = 0
-    try:
-        for _, row in df.iterrows():
-            try:
-                cursor.execute("""
-                    INSERT INTO stock_kline (code, date, open, high, low, close, volume, amount, period)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE
-                        open = VALUES(open),
-                        high = VALUES(high),
-                        low = VALUES(low),
-                        close = VALUES(close),
-                        volume = VALUES(volume),
-                        amount = VALUES(amount),
-                        updated_at = NOW()
-                """, (
-                    stock_code,
-                    row['date'],
-                    row['open'],
-                    row['high'],
-                    row['low'],
-                    row['close'],
-                    int(row['volume']) if pd.notna(row['volume']) else 0,
-                    row['amount'],
-                    period
-                ))
-                saved += 1
-            except Exception as e:
-                print(f"[保存] {stock_code} {period} {row['date']} 失败: {e}")
+    for attempt in range(retry):
+        try:
+            for _, row in df.iterrows():
+                try:
+                    cursor.execute("""
+                        INSERT INTO stock_kline (code, date, open, high, low, close, volume, amount, period)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            open = VALUES(open),
+                            high = VALUES(high),
+                            low = VALUES(low),
+                            close = VALUES(close),
+                            volume = VALUES(volume),
+                            amount = VALUES(amount),
+                            updated_at = NOW()
+                    """, (
+                        stock_code,
+                        row['date'],
+                        row['open'],
+                        row['high'],
+                        row['low'],
+                        row['close'],
+                        int(row['volume']) if pd.notna(row['volume']) else 0,
+                        row['amount'],
+                        period
+                    ))
+                    saved += 1
+                except Exception as e:
+                    if 'Deadlock' in str(e):
+                        raise e  # 重试
+                    print(f"[保存] {stock_code} {period} {row['date']} 失败: {e}")
+                    continue
+            conn.commit()
+            break  # 成功，跳出重试循环
+        except Exception as e:
+            if 'Deadlock' in str(e) and attempt < retry - 1:
+                conn.rollback()
+                time.sleep(0.5)  # 等待后重试
                 continue
+            break
 
-        conn.commit()
-    finally:
-        cursor.close()
-        conn.close()
-
+    cursor.close()
+    conn.close()
     return saved
 
 def init_all_kline_data(stock_limit: int = None):

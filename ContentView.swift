@@ -39,6 +39,13 @@ struct ContentView: View {
             .tabItem {
                 Label("自选", systemImage: "star.fill")
             }
+
+            NavigationStack {
+                PortfolioView()
+            }
+            .tabItem {
+                Label("持仓", systemImage: "chart.pie.fill")
+            }
         }
         .tint(Color(hex: "1E88E5"))
     }

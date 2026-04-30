@@ -35,16 +35,260 @@ class StockViewModel: ObservableObject {
         }
     }
 
+    // 记录股票添加到自选的时间 [股票代码: 添加日期]
+    @Published var favoriteDates: [String: Date] = [:] {
+        didSet {
+            saveFavoriteDates()
+        }
+    }
+
+    // 记录添加到自选时的价格 [股票代码: 价格]
+    @Published var favoriteEntryPrices: [String: Double] = [:] {
+        didSet {
+            saveFavoriteEntryPrices()
+        }
+    }
+
+    // 保存当前活跃的筛选条件（在FilterView中设置）
+    @Published var activeFilters: Set<String> = [] {
+        didSet {
+            saveFilters()
+            // 如果有活跃筛选，应用它们
+            if !activeFilters.isEmpty {
+                Task {
+                    await applyServerFilters(activeFilters)
+                }
+            }
+        }
+    }
+
     private let baseURL = "http://8.163.91.16:5000/api/v1"
     private let favoritesKey = "favorited_stocks"
+    private let filtersKey = "active_filters"
+    private let filtersLastAppliedKey = "filters_last_applied"
+    private let sessionStartKey = "session_start"
+    private let favoriteDatesKey = "favorite_dates"
+    private let favoriteEntryPricesKey = "favorite_entry_prices"
 
     init() {
+        // 记录本次会话开始时间
+        UserDefaults.standard.set(Date(), forKey: sessionStartKey)
         loadFavorites()
+        loadFavoriteDates()
+        loadFavoriteEntryPrices()
+        loadStoredFilters()
+        loadPositions()
+        loadTrades()
         Task {
             await loadData()
             await updatePrices()
             await loadFinancialUpdates()
+            // 启动时不自动应用筛选，让用户自己选择
         }
+    }
+
+    private func loadFavoriteEntryPrices() {
+        if let saved = UserDefaults.standard.dictionary(forKey: favoriteEntryPricesKey) as? [String: Double] {
+            favoriteEntryPrices = saved
+        }
+    }
+
+    private func saveFavoriteEntryPrices() {
+        UserDefaults.standard.set(favoriteEntryPrices, forKey: favoriteEntryPricesKey)
+    }
+
+    private func loadFavoriteDates() {
+        if let saved = UserDefaults.standard.dictionary(forKey: favoriteDatesKey) as? [String: TimeInterval] {
+            favoriteDates = saved.mapValues { Date(timeIntervalSince1970: $0) }
+        }
+    }
+
+    private func saveFavoriteDates() {
+        let timeIntervals = favoriteDates.mapValues { $0.timeIntervalSince1970 }
+        UserDefaults.standard.set(timeIntervals, forKey: favoriteDatesKey)
+    }
+
+    // 添加到自选
+    func addToFavorites(_ code: String) {
+        favorites.insert(code)
+        // 记录添加时间和当前价格
+        if favoriteDates[code] == nil {
+            favoriteDates[code] = Date()
+        }
+        // 记录添加时的价格
+        if let stock = stocks.first(where: { $0.code == code }),
+           let price = stock.price {
+            favoriteEntryPrices[code] = price
+        }
+    }
+
+    // 从自选移除
+    func removeFromFavorites(_ code: String) {
+        favorites.remove(code)
+        // 保留添加日期和价格记录（用于计算历史）
+    }
+
+    // 计算加入自选后的涨跌幅
+    func calculateFavoriteReturn(_ code: String) -> Double? {
+        guard let entryPrice = favoriteEntryPrices[code],
+              let stock = stocks.first(where: { $0.code == code }),
+              let currentPrice = stock.price,
+              entryPrice > 0 else {
+            return nil
+        }
+        return (currentPrice - entryPrice) / entryPrice * 100
+    }
+
+    // ========== 模拟交易功能 ==========
+    @Published var positions: [String: Position] = [:]
+    @Published var trades: [Trade] = []
+
+    private let positionsKey = "virtual_positions"
+    private let tradesKey = "virtual_trades"
+
+    private func loadPositions() {
+        if let data = UserDefaults.standard.data(forKey: positionsKey),
+           let saved = try? JSONDecoder().decode([String: Position].self, from: data) {
+            positions = saved
+        }
+    }
+
+    private func savePositions() {
+        if let data = try? JSONEncoder().encode(positions) {
+            UserDefaults.standard.set(data, forKey: positionsKey)
+        }
+    }
+
+    private func loadTrades() {
+        if let data = UserDefaults.standard.data(forKey: tradesKey),
+           let saved = try? JSONDecoder().decode([Trade].self, from: data) {
+            trades = saved
+        }
+    }
+
+    private func saveTrades() {
+        if let data = try? JSONEncoder().encode(trades) {
+            UserDefaults.standard.set(data, forKey: tradesKey)
+        }
+    }
+
+    // 买入股票
+    func buyStock(code: String, name: String, price: Double, quantity: Int) {
+        // 记录交易
+        let trade = Trade(
+            code: code,
+            name: name,
+            price: price,
+            quantity: quantity,
+            isBuy: true,
+            timeIntervalSince1970: Date().timeIntervalSince1970
+        )
+        trades.append(trade)
+
+        // 更新持仓
+        if var position = positions[code] {
+            // 追加买入
+            let totalCost = position.avgCost * Double(position.quantity) + price * Double(quantity)
+            position.quantity += quantity
+            position.avgCost = totalCost / Double(position.quantity)
+            positions[code] = position
+        } else {
+            // 新建持仓
+            positions[code] = Position(
+                code: code,
+                name: name,
+                quantity: quantity,
+                avgCost: price,
+                firstBuyDate: Date()
+            )
+        }
+
+        saveTrades()
+        savePositions()
+    }
+
+    // 卖出股票
+    func sellStock(code: String, price: Double, quantity: Int) {
+        guard var position = positions[code], position.quantity >= quantity else { return }
+
+        // 记录交易
+        let trade = Trade(
+            code: code,
+            name: position.name,
+            price: price,
+            quantity: quantity,
+            isBuy: false,
+            timeIntervalSince1970: Date().timeIntervalSince1970
+        )
+        trades.append(trade)
+
+        // 更新持仓
+        position.quantity -= quantity
+        if position.quantity == 0 {
+            positions.removeValue(forKey: code)
+        } else {
+            positions[code] = position
+        }
+
+        saveTrades()
+        savePositions()
+    }
+
+    // 获取持仓
+    func getPosition(_ code: String) -> Position? {
+        positions[code]
+    }
+
+    // 获取所有持仓列表
+    var positionList: [Position] {
+        Array(positions.values).sorted { $0.returnPct > $1.returnPct }
+    }
+
+    // 更新持仓的当前价格（用于计算盈亏）
+    func updatePositionPrices() {
+        for (code, var position) in positions {
+            if let stock = stocks.first(where: { $0.code == code }),
+               let price = stock.price {
+                position.currentPrice = price
+                positions[code] = position
+            }
+        }
+    }
+
+    // 总盈亏
+    var totalReturn: Double {
+        positions.values.reduce(0) { $0 + $1.positionReturn }
+    }
+
+    // 总收益率
+    var totalReturnPct: Double {
+        let totalCost = positions.values.reduce(0.0) { $0 + $1.totalCost }
+        guard totalCost > 0 else { return 0 }
+        return totalReturn / totalCost * 100
+    }
+
+    private func loadStoredFilters() {
+        // 从存储加载筛选条件（在筛选页面应用后会保存）
+        // 启动时检查是否需要应用，如果筛选标记存在
+        if let savedFilters = UserDefaults.standard.array(forKey: filtersKey) as? [String],
+           let lastApplied = UserDefaults.standard.object(forKey: filtersLastAppliedKey) as? Date {
+            // 如果筛选是在当前会话保存的，则加载
+            let sessionStart = UserDefaults.standard.object(forKey: sessionStartKey) as? Date ?? Date()
+            if lastApplied > sessionStart {
+                activeFilters = Set(savedFilters)
+            } else {
+                // 上次筛选不是在本次会话应用的，清除
+                UserDefaults.standard.removeObject(forKey: filtersKey)
+                UserDefaults.standard.removeObject(forKey: filtersLastAppliedKey)
+            }
+        }
+    }
+
+    private func saveFilters() {
+        UserDefaults.standard.set(Array(activeFilters), forKey: filtersKey)
+        UserDefaults.standard.set(Date(), forKey: filtersLastAppliedKey)
+        UserDefaults.standard.set(Date(), forKey: sessionStartKey)
+        print("保存筛选条件: \(Array(activeFilters))")
     }
 
     private func loadFavorites() {
@@ -142,11 +386,50 @@ class StockViewModel: ObservableObject {
         isLoading = false
     }
 
+    // 调用后端API应用筛选
+    @MainActor
+    func applyServerFilters(_ filters: Set<String>) async {
+        guard !filters.isEmpty else { return }
+        print("applyServerFilters: \(filters)")
+
+        guard let url = URL(string: "\(baseURL)/filter") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        do {
+            let body = ["filters": Array(filters)]
+            request.httpBody = try JSONEncoder().encode(body)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                let result = try JSONDecoder().decode(StockResponse.self, from: data)
+                if result.code == 0 {
+                    print("筛选成功: \(result.data?.count ?? 0) 只")
+                    self.stocks = result.data ?? []
+                    self.applySort()
+                } else {
+                    print("筛选失败: \(result.message ?? "未知错误")")
+                }
+            }
+        } catch {
+            print("应用筛选失败: \(error)")
+        }
+    }
+
     @MainActor
     func refresh() async {
+        // 保存当前筛选条件
+        let savedFilters = activeFilters
         await loadData()
         await updatePrices()
         await loadFinancialUpdates()
+        // 如果有保存的筛选条件，重新应用
+        if !savedFilters.isEmpty {
+            await applyServerFilters(savedFilters)
+        }
     }
 
     // 加载今日财务数据有更新的股票
@@ -375,13 +658,34 @@ class StockViewModel: ObservableObject {
     func toggleFavorite(_ stock: Stock) {
         if favorites.contains(stock.code) {
             favorites.remove(stock.code)
+            // 注意：这里不删除价格记录，保留用于参考
         } else {
             favorites.insert(stock.code)
+            // 记录添加时的价格
+            if let price = stock.price {
+                favoriteEntryPrices[stock.code] = price
+            }
+            if favoriteDates[stock.code] == nil {
+                favoriteDates[stock.code] = Date()
+            }
         }
     }
 
     var favoritedStocks: [Stock] {
-        stocks.filter { favorites.contains($0.code) }
+        // 包含所有自选的股票，即使是已经从筛选列表中移除的
+        favorites.compactMap { code in
+            // 先从当前stocks中找
+            if let stock = stocks.first(where: { $0.code == code }) {
+                return stock
+            }
+            // 如果不在stocks中，返回一个只有基本信息的Stock对象
+            return Stock(
+                code: code,
+                name: "未知",
+                price: favoriteEntryPrices[code],  // 使用记录的价格
+                change_pct: nil
+            )
+        }
     }
 }
 
@@ -401,6 +705,13 @@ struct FinancialUpdatesData: Codable {
 struct MonthFinancialResponse: Codable {
     let code: Int
     let data: MonthFinancialData?
+}
+
+// 筛选响应
+struct FilterResponse: Codable {
+    let code: Int
+    let message: String?
+    let data: [Stock]?
 }
 
 struct MonthFinancialData: Codable {

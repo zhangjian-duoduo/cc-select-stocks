@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0274FDA52FA339200017D3BB /* TradeSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0274FDA42FA339200017D3BB /* TradeSheetView.swift */; };
+		0274FDA72FA339360017D3BB /* PortfolioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0274FDA62FA339360017D3BB /* PortfolioView.swift */; };
+		0274FDA92FA33AA70017D3BB /* SellSheetView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0274FDA82FA33AA70017D3BB /* SellSheetView.swift */; };
 		2F0C76BDA182CF70095173F7 /* RemovedView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B8BBF5DF42E5C63B55D19FC /* RemovedView.swift */; };
 		306266DCE72C1386C3971B89 /* FilterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B92091F703C61E59DB1CD0A /* FilterView.swift */; };
 		3641B950D593A91836BA6E51 /* FinancialUpdatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E1773D5A40D7719267D6A0 /* FinancialUpdatesView.swift */; };
@@ -36,6 +39,9 @@
 
 /* Begin PBXFileReference section */
 		0230C0B345BEDC9594FEE1CE /* fee549f469bbb81492ab169319f36d5a989489 */ = {isa = PBXFileReference; lastKnownFileType = file; path = fee549f469bbb81492ab169319f36d5a989489; sourceTree = "<group>"; };
+		0274FDA42FA339200017D3BB /* TradeSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TradeSheetView.swift; sourceTree = "<group>"; };
+		0274FDA62FA339360017D3BB /* PortfolioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PortfolioView.swift; sourceTree = "<group>"; };
+		0274FDA82FA33AA70017D3BB /* SellSheetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SellSheetView.swift; sourceTree = "<group>"; };
 		0406E952FBC1631F9B88AE78 /* 70c0e9890d1bf58000492604373732c15c4ec2 */ = {isa = PBXFileReference; lastKnownFileType = file; path = 70c0e9890d1bf58000492604373732c15c4ec2; sourceTree = "<group>"; };
 		04DA212508A8711E4E82A7F3 /* pre-commit.sample */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "pre-commit.sample"; sourceTree = "<group>"; };
 		055906467FB7130CD850BBE5 /* 3ea268c037ed4e43db8485c2dd35f93a379c4a */ = {isa = PBXFileReference; lastKnownFileType = file; path = 3ea268c037ed4e43db8485c2dd35f93a379c4a; sourceTree = "<group>"; };
@@ -1629,6 +1635,9 @@
 		D8D4736966B8B491FFC540EA /* Select-Stocks */ = {
 			isa = PBXGroup;
 			children = (
+				0274FDA82FA33AA70017D3BB /* SellSheetView.swift */,
+				0274FDA62FA339360017D3BB /* PortfolioView.swift */,
+				0274FDA42FA339200017D3BB /* TradeSheetView.swift */,
 				45047B0F5232819B673A6C76 /* .gitignore */,
 				38A09553A15275B82A5E3BB9 /* ChangesView.swift */,
 				121670FE41FA3FB56C79BC8C /* ContentView.swift */,
@@ -1846,10 +1855,13 @@
 				3977A423964DCB75CE731EB1 /* Stock.swift in Sources */,
 				AC9EC0B29ED04E86AC2F3126 /* StockListView.swift in Sources */,
 				ABCD1234567890ABCDEF00 /* StockDetailPageView.swift in Sources */,
+				0274FDA52FA339200017D3BB /* TradeSheetView.swift in Sources */,
 				615FBB10A6AC84B892816C92 /* StockViewModel.swift in Sources */,
 				A7D34F6DD248684DB62A6946 /* WatchListView.swift in Sources */,
 				3641B950D593A91836BA6E51 /* FinancialUpdatesView.swift in Sources */,
 				2F0C76BDA182CF70095173F7 /* RemovedView.swift in Sources */,
+				0274FDA92FA33AA70017D3BB /* SellSheetView.swift in Sources */,
+				0274FDA72FA339360017D3BB /* PortfolioView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
