@@ -20,7 +20,7 @@ struct FilterView: View {
     @State private var sectorRotation = false  // 行业轮动
 
     @State private var isLoading = false
-    @State private var filteredCount: Int = 0
+    @State private var filteredCount: Int? = nil
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
 
@@ -201,11 +201,18 @@ struct FilterView: View {
                 .padding(.horizontal)
 
                 // 结果显示
-                if filteredCount > 0 {
-                    Text("筛选结果: \(filteredCount) 只股票")
-                        .font(.subheadline)
-                        .foregroundColor(Color(hex: "4CAF50"))
-                        .padding(.top, 8)
+                if let count = filteredCount {
+                    if count > 0 {
+                        Text("筛选结果: \(count) 只股票")
+                            .font(.subheadline)
+                            .foregroundColor(Color(hex: "4CAF50"))
+                            .padding(.top, 8)
+                    } else {
+                        Text("无匹配结果，请调整筛选条件")
+                            .font(.subheadline)
+                            .foregroundColor(Color(hex: "FF9800"))
+                            .padding(.top, 8)
+                    }
                 }
 
                 Spacer()
@@ -307,7 +314,7 @@ struct FilterView: View {
         lowPB = false
         smallCap = false
         sectorRotation = false
-        filteredCount = 0
+        filteredCount = nil
         stockViewModel.stocks = stockViewModel.allStocks
         stockViewModel.applySort()
         stockViewModel.clearFilters()

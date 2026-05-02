@@ -6,16 +6,18 @@ API接口模块
 
 from flask import Flask, jsonify, request
 import pymysql
+import os
+import traceback
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# 数据库配置
+# 数据库配置（密码从环境变量读取，未设置则使用空密码）
 DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'database': os.environ.get('DB_NAME', 'select_stocks'),
     'charset': 'utf8mb4'
 }
 
@@ -75,30 +77,6 @@ def get_stocks():
         for row in result:
             if row.get('selected_at'):
                 row['selected_at'] = row['selected_at'].strftime('%Y-%m-%d')
-            if row.get('price'):
-                try:
-                    val = row['price']
-                    if isinstance(val, (int, float, Decimal)):
-                        row['price'] = float(val)
-                    elif val and val != 'None':
-                        row['price'] = float(val)
-                    else:
-                        row['price'] = 0.0
-                except:
-                    row['price'] = 0.0
-            if row.get('change_pct'):
-                try:
-                    val = row['change_pct']
-                    if isinstance(val, (int, float, Decimal)):
-                        row['change_pct'] = float(val)
-                    elif isinstance(val, str) and val:
-                        row['change_pct'] = float(val)
-                    elif val and val != 'None':
-                        row['change_pct'] = float(val)
-                    else:
-                        row['change_pct'] = 0.0
-                except:
-                    row['change_pct'] = 0.0
             # 解析JSON字段
             for json_field in ['holders_trend', 'macd_divergence', 'trend_analysis']:
                 if row.get(json_field):
@@ -109,7 +87,7 @@ def get_stocks():
                         row[json_field] = None
                 else:
                     row[json_field] = None
-            # 处理数值字段 - 统一处理所有可能为字符串的数值字段
+            # 统一处理数值字段
             for num_field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position']:
                 if row.get(num_field) is not None:
                     try:
@@ -117,14 +95,13 @@ def get_stocks():
                         if isinstance(val, (int, float, Decimal)):
                             row[num_field] = float(val)
                         elif isinstance(val, str) and val:
-                            # 尝试转换字符串为数字
                             row[num_field] = float(val)
                         else:
-                            row[num_field] = None
+                            row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
                     except:
-                        row[num_field] = None
+                        row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
                 else:
-                    row[num_field] = None
+                    row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
 
         return jsonify({'code': 0, 'data': result, 'total': len(result)})
 
@@ -1066,12 +1043,13 @@ def refresh_stocks():
         conn = get_db()
         cursor = conn.cursor()
 
-        # 清空旧数据
-        cursor.execute("TRUNCATE TABLE stocks")
-        cursor.execute("TRUNCATE TABLE stock_analysis")
+        # 使用事务保护：先删后插，失败可回滚
+        try:
+            cursor.execute("START TRANSACTION")
+            cursor.execute("DELETE FROM stocks")
+            cursor.execute("DELETE FROM stock_analysis")
 
-        # 插入新数据
-        for stock in selected_stocks:
+            for stock in selected_stocks:
             cursor.execute("""
                 INSERT INTO stocks (code, name, price, change_pct, selected_at)
                 VALUES (%s, %s, %s, %s, %s)
@@ -1094,7 +1072,10 @@ def refresh_stocks():
                 analysis.get('price_position', 0.5)
             ))
 
-        conn.commit()
+            conn.commit()
+        except:
+            conn.rollback()
+            raise
 
         # 保存历史记录
         today = datetime.now().strftime('%Y-%m-%d')
@@ -2281,24 +2262,23 @@ if __name__ == '__main__':
     # 注册定时任务（下午4点更新分析数据）
     from datetime import datetime, timedelta
     import threading
+    import time
 
     def run_scheduled_task():
         """下午4点执行分析数据更新"""
         while True:
             now = datetime.now()
-            # 设置每天下午4点执行
-            target_hour = 16
-            target_minute = 0
-
-            if now.hour == target_hour and now.minute == target_minute:
+            if now.hour == 16 and now.minute == 0:
                 print("[定时任务] 开始执行分析数据更新...")
-                with app.test_request_context():
-                    result = refresh_analysis_scheduled()
-                    print("[定时任务] 完成:", result.get_data(as_text=True))
-
-            # 每分钟检查一次
-            threading.Timer(60, run_scheduled_task).start()
-            break
+                try:
+                    with app.test_request_context():
+                        result = refresh_analysis_scheduled()
+                        print("[定时任务] 完成:", result.get_data(as_text=True))
+                except Exception as e:
+                    print(f"[定时任务] 失败: {e}")
+                    import traceback
+                    traceback.print_exc()
+            time.sleep(60)
 
     # 启动定时任务检查（在后台线程）
     threading.Thread(target=run_scheduled_task, daemon=True).start()

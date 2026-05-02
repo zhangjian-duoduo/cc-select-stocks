@@ -93,13 +93,13 @@ class StockViewModel: ObservableObject {
     private let favoriteStockDataKey = "favorite_stock_data"
 
     init() {
-        // 记录本次会话开始时间
-        UserDefaults.standard.set(Date(), forKey: sessionStartKey)
         loadFavorites()
         loadFavoriteDates()
         loadFavoriteEntryPrices()
         loadFavoriteStockData()
         loadStoredFilters()
+        // 记录本次会话开始时间（必须在 loadStoredFilters 之后，否则筛选条件会被清掉）
+        UserDefaults.standard.set(Date(), forKey: sessionStartKey)
         loadPositions()
         loadTrades()
         Task {
@@ -495,7 +495,11 @@ class StockViewModel: ObservableObject {
 
     // 调用后端API应用筛选
     func applyServerFilters(_ filters: Set<String>) async {
-        guard !filters.isEmpty else { return }
+        guard !filters.isEmpty else {
+            stocks = allStocks
+            applySort()
+            return
+        }
         print("applyServerFilters: \(filters)")
 
         guard let url = URL(string: "\(baseURL)/filter") else { return }
@@ -694,7 +698,7 @@ class StockViewModel: ObservableObject {
         return levels.isEmpty ? "-" : levels.joined(separator: "/")
     }
 
-    private func calculateScore(_ stock: Stock) -> Double {
+    func calculateScore(_ stock: Stock) -> Double {
         // 优化后的评分算法
         // 核心逻辑：低估值+高筹码集中+趋势向上+底背离 = 高分
 
@@ -733,7 +737,7 @@ class StockViewModel: ObservableObject {
         return min(1.0, max(0.0, total))
     }
 
-    private func trendScoreValue(_ trend: Stock.TrendAnalysis?) -> Double {
+    func trendScoreValue(_ trend: Stock.TrendAnalysis?) -> Double {
         guard let t = trend else { return 0.5 }
         // 短期趋势权重最高
         switch t.short {

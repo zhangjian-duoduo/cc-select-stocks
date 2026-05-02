@@ -405,9 +405,11 @@ struct StockCard: View {
         return price < 1.0  // 连续20交易日<1元直接退市
     }
 
-    // 检查每股净资产（暂无数据字段，暂时返回false）
+    // 检查每股净资产是否为负（破净风险）
     private func checkNAV() -> Bool {
-        return false
+        guard let bvps = stock.book_value_per_share,
+              let val = Double(bvps) else { return false }
+        return val < 0
     }
 
     // 详细退市风险分析（用于详情页）
@@ -558,42 +560,16 @@ struct StockCard: View {
     }
 
     func calculateScore() -> String {
-        let trendScore = trendScoreValue()
-        let pricePct = stock.price_percentile ?? 50
-        let valuationScore = (100 - pricePct) / 100.0
-        let chipScore = (stock.chip_concentration ?? 50) / 100.0
-        let holderPct = shareholderChangePercent()
-        let holderScore: Double
-        if holderPct < -10 { holderScore = 1.0 }
-        else if holderPct < 0 { holderScore = 0.7 }
-        else if holderPct < 20 { holderScore = 0.4 }
-        else { holderScore = 0.1 }
-        var divergenceScore: Double = 0
-        if stock.macd_divergence?.monthly == true { divergenceScore += 0.5 }
-        if stock.macd_divergence?.weekly == true { divergenceScore += 0.3 }
-        if stock.macd_divergence?.daily == true { divergenceScore += 0.2 }
-        let total = trendScore * 0.30 + valuationScore * 0.25 + chipScore * 0.20 + holderScore * 0.15 + divergenceScore * 0.10
-        return String(format: "%.0f", min(1.0, max(0.0, total)) * 100)
+        let total = stockViewModel.calculateScore(stock)
+        return String(format: "%.0f", total * 100)
     }
 
     func trendScoreValue() -> Double {
-        guard let t = stock.trend_analysis else { return 0.5 }
-        switch t.short {
-        case "上涨趋势": return 1.0
-        case "震荡": return 0.6
-        case "下跌趋势": return 0.2
-        default: return 0.5
-        }
+        return stockViewModel.trendScoreValue(stock.trend_analysis)
     }
 
     func shareholderChangePercent() -> Double {
-        guard let trend = stock.holders_trend, trend.count >= 2 else { return 0 }
-        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
-        guard validTrend.count >= 2 else { return 0 }
-        let oldest = validTrend.first?.holders ?? 0
-        let newest = validTrend.last?.holders ?? 0
-        if oldest > 0 { return Double(newest - oldest) / Double(oldest) * 100 }
-        return 0
+        return stockViewModel.shareholderChangePercent(stock)
     }
 
     func shareholderTrendValue() -> String {

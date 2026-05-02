@@ -9,9 +9,6 @@ struct SelectStocksApp: App {
             ContentView()
                 .environmentObject(stockViewModel)
                 .preferredColorScheme(.dark)
-                .task {
-                    await stockViewModel.loadData()
-                }
         }
     }
 }

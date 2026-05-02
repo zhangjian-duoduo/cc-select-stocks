@@ -79,7 +79,9 @@ struct ChangesView: View {
         let now = Date()
         let comps = calendar.dateComponents([.year, .month], from: now)
         let dispComps = calendar.dateComponents([.year, .month], from: displayedDate)
-        return dispComps.year! < comps.year! || (dispComps.year! == comps.year! && dispComps.month! < comps.month!)
+        guard let dispYear = dispComps.year, let dispMonth = dispComps.month,
+              let nowYear = comps.year, let nowMonth = comps.month else { return false }
+        return dispYear < nowYear || (dispYear == nowYear && dispMonth < nowMonth)
     }
 
     private var daysOfMonth: [Int] {

@@ -6,6 +6,7 @@ struct SellSheetView: View {
     @Binding var quantity: String
 
     @EnvironmentObject var stockViewModel: StockViewModel
+    @State private var errorMessage: String?
 
     // 获取最新价格
     private var currentPrice: Double {
@@ -68,11 +69,37 @@ struct SellSheetView: View {
                 .background(Color(hex: "1E1E1E"))
                 .cornerRadius(8)
 
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(Color(hex: "FF9800"))
+                        .padding(.horizontal)
+                }
+
                 Button {
-                    if let qty = Int(quantity), qty >= 100, qty % 100 == 0, currentPrice > 0 {
-                        if stockViewModel.sellStock(code: position.code, price: currentPrice, quantity: qty) {
-                            isPresented = false
-                        }
+                    errorMessage = nil
+                    guard currentPrice > 0 else {
+                        errorMessage = "无法获取当前价格"
+                        return
+                    }
+                    guard let qty = Int(quantity) else {
+                        errorMessage = "请输入有效的数字"
+                        return
+                    }
+                    guard qty >= 100 else {
+                        errorMessage = "最少卖出100股"
+                        return
+                    }
+                    guard qty % 100 == 0 else {
+                        errorMessage = "数量必须是100的整数倍"
+                        return
+                    }
+                    guard qty <= position.quantity else {
+                        errorMessage = "超出持仓数量(\(position.quantity)股)"
+                        return
+                    }
+                    if stockViewModel.sellStock(code: position.code, price: currentPrice, quantity: qty) {
+                        isPresented = false
                     }
                 } label: {
                     Text("确认卖出")
@@ -99,7 +126,7 @@ struct SellSheetView: View {
                     }
 
                     Button {
-                        let half = (position.quantity / 200) * 100
+                        let half = (position.quantity / 2) / 100 * 100
                         if half >= 100 { quantity = String(half) }
                     } label: {
                         Text("1/2")

@@ -14,6 +14,8 @@ struct FinancialUpdatesView: View {
     @State private var currentSort: FinancialSortOption = .yoy
     @State private var sortAscending: Bool = false
     @State private var displayedDate: Date = Date()
+    @State private var selectedStockIndex: Int = 0
+    @State private var showDetailPage = false
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
 
@@ -37,7 +39,9 @@ struct FinancialUpdatesView: View {
         let now = Date()
         let comps = calendar.dateComponents([.year, .month], from: now)
         let dispComps = calendar.dateComponents([.year, .month], from: displayedDate)
-        return dispComps.year! < comps.year! || (dispComps.year! == comps.year! && dispComps.month! < comps.month!)
+        guard let dispYear = dispComps.year, let dispMonth = dispComps.month,
+              let nowYear = comps.year, let nowMonth = comps.month else { return false }
+        return dispYear < nowYear || (dispYear == nowYear && dispMonth < nowMonth)
     }
 
     private var daysOfMonth: [Int] {
@@ -227,7 +231,15 @@ struct FinancialUpdatesView: View {
             } else {
                 List {
                     ForEach(stockViewModel.financialUpdateStocks) { stock in
-                        FinancialUpdateCard(stock: stock)
+                        Button {
+                            if let allIdx = stockViewModel.allStocks.firstIndex(where: { $0.code == stock.code }) {
+                                selectedStockIndex = allIdx
+                                showDetailPage = true
+                            }
+                        } label: {
+                            FinancialUpdateCard(stock: stock)
+                        }
+                        .buttonStyle(PlainButtonStyle())
                     }
                 }
                 .listStyle(.plain)
@@ -238,6 +250,15 @@ struct FinancialUpdatesView: View {
         .background(Color(hex: "121212"))
         .navigationTitle("财务更新")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showDetailPage) {
+            if selectedStockIndex < stockViewModel.allStocks.count {
+                StockDetailPageView(
+                    currentIndex: selectedStockIndex,
+                    allStocks: stockViewModel.allStocks,
+                    currentPage: $selectedStockIndex
+                )
+            }
+        }
         .onAppear {
             loadMonthData(month: currentYearMonth)
         }

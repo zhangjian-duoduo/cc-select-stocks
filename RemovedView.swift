@@ -17,10 +17,13 @@ struct RemovedResponse: Codable {
 }
 
 struct RemovedView: View {
+    @EnvironmentObject var stockViewModel: StockViewModel
     @State private var removedData: [String: [RemovedStock]] = [:]
     @State private var isLoading = false
     @State private var errorMessage: String?
     @State private var selectedDate: String?
+    @State private var selectedStockIndex: Int = 0
+    @State private var showDetailPage = false
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
 
@@ -66,8 +69,16 @@ struct RemovedView: View {
                 Spacer()
             } else if let date = selectedDate, let stocks = removedData[date] {
                 List(stocks) { stock in
-                    RemovedStockRow(stock: stock)
-                        .listRowBackground(Color(hex: "1E1E1E"))
+                    Button {
+                        if let allIdx = stockViewModel.allStocks.firstIndex(where: { $0.code == stock.code }) {
+                            selectedStockIndex = allIdx
+                            showDetailPage = true
+                        }
+                    } label: {
+                        RemovedStockRow(stock: stock)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .listRowBackground(Color(hex: "1E1E1E"))
                 }
                 .listStyle(.plain)
             } else {
@@ -80,6 +91,15 @@ struct RemovedView: View {
         .background(Color(hex: "121212"))
         .navigationTitle("剔除股票")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showDetailPage) {
+            if selectedStockIndex < stockViewModel.allStocks.count {
+                StockDetailPageView(
+                    currentIndex: selectedStockIndex,
+                    allStocks: stockViewModel.allStocks,
+                    currentPage: $selectedStockIndex
+                )
+            }
+        }
         .onAppear {
             loadRemoved()
         }

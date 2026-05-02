@@ -7,6 +7,7 @@
 
 import threading
 import time
+import os
 from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -17,12 +18,12 @@ import concurrent.futures
 import math
 
 
-# 数据库配置
+# 数据库配置（密码从环境变量读取，未设置则使用空密码）
 DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
+    'host': os.environ.get('DB_HOST', 'localhost'),
+    'user': os.environ.get('DB_USER', 'root'),
+    'password': os.environ.get('DB_PASSWORD', ''),
+    'database': os.environ.get('DB_NAME', 'select_stocks'),
     'charset': 'utf8mb4'
 }
 
