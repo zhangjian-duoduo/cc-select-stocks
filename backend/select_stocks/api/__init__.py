@@ -1099,24 +1099,24 @@ def refresh_stocks():
             cursor.execute("DELETE FROM stock_analysis")
 
             for stock in selected_stocks:
-            cursor.execute("""
-                INSERT INTO stocks (code, name, price, change_pct, selected_at)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (stock['code'], stock['name'], stock['price'], stock['change_pct'], stock['selected_at']))
+                cursor.execute("""
+                    INSERT INTO stocks (code, name, price, change_pct, selected_at)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (stock['code'], stock['name'], stock['price'], stock['change_pct'], stock['selected_at']))
 
-            # 分析每只股票
-            analysis = analyzer.analyze_stock(stock['code'])
-            cursor.execute("""
-                INSERT INTO stock_analysis
-                (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (
-                stock['code'],
-                json.dumps(analysis.get('holders_trend', [])),
-                analysis.get('change_5y', 0),
-                analysis.get('price_percentile', 50),
-                analysis.get('chip_concentration', 0.5),
-                json.dumps(analysis.get('macd_divergence', {})),
+                # 分析每只股票
+                analysis = analyzer.analyze_stock(stock['code'])
+                cursor.execute("""
+                    INSERT INTO stock_analysis
+                    (code, holders_trend, change_5y, price_percentile, chip_concentration, macd_divergence, trend_analysis, price_position)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    stock['code'],
+                    json.dumps(analysis.get('holders_trend', [])),
+                    analysis.get('change_5y', 0),
+                    analysis.get('price_percentile', 50),
+                    analysis.get('chip_concentration', 0.5),
+                    json.dumps(analysis.get('macd_divergence', {})),
                 json.dumps(analysis.get('trend_analysis', {})),
                 analysis.get('price_position', 0.5)
             ))
