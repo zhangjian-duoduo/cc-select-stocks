@@ -35,6 +35,8 @@
 		F394B5101E3E5B3B376D7053 /* SelectStocksApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64D35315BC81A2547E69879F /* SelectStocksApp.swift */; };
 		F66FF5DBB2C894B076439D5B /* sendemail-validate.sample in Resources */ = {isa = PBXBuildFile; fileRef = 1D2998EC1AD09FBEE777D5EC /* sendemail-validate.sample */; };
 		FB78BCF7CF939566A5DAEBB4 /* prepare-commit-msg.sample in Resources */ = {isa = PBXBuildFile; fileRef = 83C201DB891DB9751E300D0A /* prepare-commit-msg.sample */; };
+		408D0E76CC1145B1A446363C /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A33F1DCB87184B6FA006C58F /* APIClient.swift */; };
+		66BC1A6C71D4429DA83A156A /* CalendarMonthPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39B6CB41DE374D44B7AB788C /* CalendarMonthPicker.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -272,6 +274,8 @@
 		FC49A6B5B9FD88A79B8443DC /* 80142a881fc435c7b0e5fb2a99cb25511acf0b */ = {isa = PBXFileReference; lastKnownFileType = file; path = 80142a881fc435c7b0e5fb2a99cb25511acf0b; sourceTree = "<group>"; };
 		FE904AA6C291C8BF18FEA698 /* 9c1a5659760237994cdb6fafd22c5cdca2a8a0 */ = {isa = PBXFileReference; lastKnownFileType = file; path = 9c1a5659760237994cdb6fafd22c5cdca2a8a0; sourceTree = "<group>"; };
 		FF58CCFAF4F126996A803B71 /* c8dbb5c2a3c6587786dc02b148555288ed9eda */ = {isa = PBXFileReference; lastKnownFileType = file; path = c8dbb5c2a3c6587786dc02b148555288ed9eda; sourceTree = "<group>"; };
+		A33F1DCB87184B6FA006C58F /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
+		39B6CB41DE374D44B7AB788C /* CalendarMonthPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarMonthPicker.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -1650,6 +1654,8 @@
 				5CE0D07A17B9879AA92644BD /* StockViewModel.swift */,
 				F100268B523C73AFBBE90C32 /* WatchListView.swift */,
 				1B8BBF5DF42E5C63B55D19FC /* RemovedView.swift */,
+				A33F1DCB87184B6FA006C58F /* APIClient.swift */,
+				39B6CB41DE374D44B7AB788C /* CalendarMonthPicker.swift */,
 			);
 			name = "Select-Stocks";
 			path = .;
@@ -1862,6 +1868,8 @@
 				2F0C76BDA182CF70095173F7 /* RemovedView.swift in Sources */,
 				0274FDA92FA33AA70017D3BB /* SellSheetView.swift in Sources */,
 				0274FDA72FA339360017D3BB /* PortfolioView.swift in Sources */,
+				408D0E76CC1145B1A446363C /* APIClient.swift in Sources */,
+				66BC1A6C71D4429DA83A156A /* CalendarMonthPicker.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
