@@ -77,6 +77,53 @@ struct APIClient {
         return try await request(url: url, retries: 0, timeout: timeout)
     }
 
+    /// 返回原始 Data，用于自定义解析（如 StockAPI.parseDetailResponse）
+    static func getData(
+        _ path: String,
+        queryItems: [URLQueryItem] = [],
+        retries: Int = 2,
+        timeout: TimeInterval = 30
+    ) async throws -> Data {
+        var components = URLComponents(string: "\(baseURL)\(path)")
+        components?.queryItems = queryItems.isEmpty ? nil : queryItems
+
+        guard let url = components?.url else {
+            throw APIError.urlError
+        }
+
+        var urlRequest = URLRequest(url: url)
+        urlRequest.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        urlRequest.timeoutInterval = timeout
+
+        var lastError: Error?
+        for attempt in 0...retries {
+            do {
+                let (data, response) = try await URLSession.shared.data(for: urlRequest)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw APIError.serverError(0)
+                }
+                if httpResponse.statusCode == 403 {
+                    throw APIError.serverError(403)
+                }
+                guard httpResponse.statusCode == 200 else {
+                    throw APIError.serverError(httpResponse.statusCode)
+                }
+                return data
+            } catch is CancellationError {
+                throw APIError.timeout
+            } catch let error as APIError {
+                lastError = error
+                if case .serverError = error { throw error }
+            } catch {
+                lastError = APIError.networkError(error)
+            }
+            if attempt < retries {
+                try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt)) * 1_000_000_000))
+            }
+        }
+        throw lastError ?? APIError.timeout
+    }
+
     // MARK: - Private
 
     private static func request<T: Decodable>(

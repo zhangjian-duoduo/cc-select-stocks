@@ -144,6 +144,15 @@ struct BatchStockResponse: Codable {
     let message: String?
 }
 
+struct FinancialHistoryResponse: Codable {
+    let code: Int
+    let data: FinancialHistoryData?
+}
+
+struct FinancialHistoryData: Codable {
+    let history: [Stock.FinancialHistoryItem]?
+}
+
 // 虚拟交易记录
 struct Trade: Codable, Identifiable {
     var id: String { code + "_" + String(timeIntervalSince1970) }

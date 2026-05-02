@@ -87,7 +87,6 @@ class StockViewModel: ObservableObject {
         activeFilters = []
     }
 
-    private let baseURL = AppConfig.baseURL
     private let favoritesKey = "favorited_stocks"
     private let filtersKey = "active_filters"
     private let filtersLastAppliedKey = "filters_last_applied"
@@ -738,13 +737,6 @@ struct FinancialUpdatesData: Codable {
 struct MonthFinancialResponse: Codable {
     let code: Int
     let data: MonthFinancialData?
-}
-
-// 筛选响应
-struct FilterResponse: Codable {
-    let code: Int
-    let message: String?
-    let data: [Stock]?
 }
 
 struct MonthFinancialData: Codable {

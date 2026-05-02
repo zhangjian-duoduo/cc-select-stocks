@@ -964,6 +964,7 @@ def check_small_cap_simple(stock_code, price):
         return False
 
 @app.route('/api/v1/stock/<stock_code>', methods=['GET'])
+@require_api_key
 def get_stock_detail(stock_code):
     """获取个股详情"""
     conn = get_db()
@@ -2256,6 +2257,7 @@ def get_financial_updates_by_month(year_month):
 
 
 @app.route('/api/v1/stock/<stock_code>/financial_history', methods=['GET'])
+@require_api_key
 def get_stock_financial_history(stock_code):
     """获取股票的历史财务数据（2年）"""
     conn = None

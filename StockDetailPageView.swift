@@ -14,8 +14,6 @@ struct StockDetailPageView: View {
     @State private var selectedKlineIndex: Int? = nil
     @State private var selectedFinancialIndex: Int? = nil
 
-    private let baseURL = AppConfig.baseURL
-
     enum KlinePeriod: String, CaseIterable {
         case daily = "日"
         case weekly = "周"
@@ -91,14 +89,11 @@ struct StockDetailPageView: View {
 
     private func loadStockDetail(_ stockCode: String) {
         Task {
-            guard let url = URL(string: "\(baseURL)/stock/\(stockCode)") else { return }
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    if let stock = StockAPI.parseDetailResponse(data) {
-                        await MainActor.run {
-                            detailedStocks[stockCode] = stock
-                        }
+                let data = try await APIClient.getData("/stock/\(stockCode)", retries: 1)
+                if let stock = StockAPI.parseDetailResponse(data) {
+                    await MainActor.run {
+                        detailedStocks[stockCode] = stock
                     }
                 }
             } catch {
@@ -109,26 +104,11 @@ struct StockDetailPageView: View {
 
     private func loadFinancialHistory(_ stockCode: String) {
         Task {
-            guard let url = URL(string: "\(baseURL)/stock/\(stockCode)/financial_history") else { return }
             do {
-                let (data, response) = try await URLSession.shared.data(from: url)
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                       let responseData = json["data"] as? [String: Any],
-                       let history = responseData["history"] as? [[String: Any]] {
-                        let items = history.compactMap { dict -> Stock.FinancialHistoryItem? in
-                            var item = Stock.FinancialHistoryItem()
-                            item.report_date = dict["report_date"] as? String
-                            item.report_name = dict["report_name"] as? String
-                            item.quarter = dict["quarter"] as? String
-                            item.net_profit_yoy = dict["net_profit_yoy"] as? String
-                            item.net_profit_qoq = dict["net_profit_qoq"] as? String
-                            item.revenue_yoy = dict["revenue_yoy"] as? String
-                            return item
-                        }
-                        await MainActor.run {
-                            financialHistoryStocks[stockCode] = items
-                        }
+                let result: FinancialHistoryResponse = try await APIClient.get("/stock/\(stockCode)/financial_history", retries: 1)
+                if let history = result.data?.history {
+                    await MainActor.run {
+                        financialHistoryStocks[stockCode] = history
                     }
                 }
             } catch {
