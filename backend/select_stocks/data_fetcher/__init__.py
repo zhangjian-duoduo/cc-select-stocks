@@ -74,7 +74,7 @@ class DataFetcher:
                 charset='utf8mb4'
             )
             cursor = conn.cursor(pymysql.cursors.DictCursor)
-            cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE (code LIKE '000%' OR code LIKE '001%' OR code LIKE '002%' OR code LIKE '300%' OR code LIKE '600%' OR code LIKE '601%' OR code LIKE '603%' OR code LIKE '605%' OR code LIKE '688%' OR code LIKE '003%')")
+            cursor.execute("SELECT DISTINCT code FROM stock_kline")
             rows = cursor.fetchall()
             cursor.close()
             conn.close()

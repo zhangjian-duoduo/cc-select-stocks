@@ -240,11 +240,6 @@ struct FinancialUpdatesView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             loadMonthData(month: currentYearMonth)
-            if selectedDate.isEmpty {
-                Task {
-                    await stockViewModel.loadFinancialUpdates()
-                }
-            }
         }
     }
 

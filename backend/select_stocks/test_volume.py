@@ -33,5 +33,5 @@ if daily is not None:
     ratio = up_vol/down_vol if down_vol > 0 else 0
     print(f'倍数: {ratio:.2f}')
 
-    result = selector.check_volume_price规律(daily, min_ratio=2.0)
+    result = selector.check_volume_price_pattern(daily, min_ratio=2.0)
     print(f'量价配合 (2倍): {result}')

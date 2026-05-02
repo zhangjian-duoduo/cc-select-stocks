@@ -5,6 +5,19 @@ struct WatchListView: View {
     @State private var selectedCodes: Set<String> = []
     @State private var isSelectionMode = false
     @State private var showBatchBuySheet = false
+    @State private var selectedStockIndex: Int = 0
+    @State private var showDetailPage = false
+    @State private var searchText = ""
+
+    private var filteredFavorites: [Stock] {
+        if searchText.isEmpty {
+            return stockViewModel.favoritedStocks
+        }
+        return stockViewModel.favoritedStocks.filter { stock in
+            stock.code.localizedCaseInsensitiveContains(searchText) ||
+            stock.name.localizedCaseInsensitiveContains(searchText)
+        }
+    }
 
     private var selectedStocks: [Stock] {
         stockViewModel.favoritedStocks.filter { selectedCodes.contains($0.code) }
@@ -26,8 +39,30 @@ struct WatchListView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                // 搜索栏
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.gray)
+                    TextField("搜索股票代码或名称", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                        .foregroundColor(.white)
+                    if !searchText.isEmpty {
+                        Button {
+                            searchText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color(hex: "2C2C2C"))
+                .cornerRadius(10)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+
                 List {
-                    ForEach(stockViewModel.favoritedStocks) { stock in
+                    ForEach(Array(filteredFavorites.enumerated()), id: \.element.code) { index, stock in
                         HStack {
                             if isSelectionMode {
                                 Button {
@@ -45,7 +80,10 @@ struct WatchListView: View {
 
                                 StockCard(stock: stock, sortOption: .position)
                             } else {
-                                NavigationLink(destination: StockDetailView(stock: stock)) {
+                                Button {
+                                    selectedStockIndex = index
+                                    showDetailPage = true
+                                } label: {
                                     StockCard(stock: stock, sortOption: .position)
                                 }
                                 .buttonStyle(PlainButtonStyle())
@@ -61,6 +99,15 @@ struct WatchListView: View {
         }
         .background(Color(hex: "121212"))
         .navigationTitle("自选")
+        .navigationDestination(isPresented: $showDetailPage) {
+            if selectedStockIndex < filteredFavorites.count {
+                StockDetailPageView(
+                    currentIndex: selectedStockIndex,
+                    allStocks: filteredFavorites,
+                    currentPage: $selectedStockIndex
+                )
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if !stockViewModel.favoritedStocks.isEmpty {

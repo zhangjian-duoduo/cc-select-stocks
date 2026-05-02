@@ -50,7 +50,7 @@ class StockSelector:
         except:
             return False
 
-    def check_volume_price规律(self, monthly_df: pd.DataFrame, weekly_df: pd.DataFrame) -> bool:
+    def check_volume_price_pattern(self, monthly_df: pd.DataFrame, weekly_df: pd.DataFrame) -> bool:
         """检查量价配合规律:
         周K上涨波段：至少5根K线，从低点开始到高点不再创新高结束
         周K下跌波段：至少5根K线，从高点开始到低点不再创新低结束
@@ -218,7 +218,7 @@ class StockSelector:
         weekly_df = self.df.fetch_with_fallback('get_stock_weekly', stock_code, start_date, end_date)
 
         # 条件3: 量价配合（上涨波段成交量 > 下跌波段成交量 * 70%）
-        if not self.check_volume_price规律(monthly_df, weekly_df):
+        if not self.check_volume_price_pattern(monthly_df, weekly_df):
             return None
 
         # 获取日K数据（用于股价低位判断）

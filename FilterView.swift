@@ -165,25 +165,39 @@ struct FilterView: View {
                 .padding(.horizontal)
 
                 // 筛选按钮
-                Button(action: {
-                    applyFilter()
-                }) {
-                    HStack {
-                        if isLoading {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text("应用筛选")
-                        }
+                HStack(spacing: 12) {
+                    Button(action: {
+                        clearAllFilters()
+                    }) {
+                        Text("清除条件")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                            .background(Color(hex: "607D8B"))
+                            .cornerRadius(12)
                     }
-                    .font(.headline)
-                    .foregroundColor(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding()
-                    .background(Color(hex: "1E88E5"))
-                    .cornerRadius(12)
+
+                    Button(action: {
+                        applyFilter()
+                    }) {
+                        HStack {
+                            if isLoading {
+                                ProgressView()
+                                    .tint(.white)
+                            } else {
+                                Text("应用筛选")
+                            }
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color(hex: "1E88E5"))
+                        .cornerRadius(12)
+                    }
+                    .disabled(isLoading)
                 }
-                .disabled(isLoading)
                 .padding(.horizontal)
 
                 // 结果显示
@@ -276,6 +290,27 @@ struct FilterView: View {
             }
             isLoading = false
         }
+    }
+
+    private func clearAllFilters() {
+        momentumReversal = false
+        maAlignment = false
+        volumeBreak = false
+        lowVolume = false
+        yoyPositive = false
+        qoqPositive = false
+        holderDecrease = false
+        volumeRiseStagnant = false
+        supportLevel = false
+        resistanceLevel = false
+        highDividend = false
+        lowPB = false
+        smallCap = false
+        sectorRotation = false
+        filteredCount = 0
+        stockViewModel.stocks = stockViewModel.allStocks
+        stockViewModel.applySort()
+        stockViewModel.clearFilters()
     }
 }
 

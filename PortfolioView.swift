@@ -11,7 +11,7 @@ struct PortfolioView: View {
     @State private var showBatchSellSheet = false
 
     private func currentPrice(for position: Position) -> Double {
-        stockViewModel.stocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
+        stockViewModel.allStocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
     }
 
     private var totalMarketValue: Double {
@@ -26,7 +26,7 @@ struct PortfolioView: View {
 
     private var selectedStocks: [Stock] {
         selectedPositions.compactMap { pos in
-            if let stock = stockViewModel.stocks.first(where: { $0.code == pos.code }) {
+            if let stock = stockViewModel.allStocks.first(where: { $0.code == pos.code }) {
                 return stock
             }
             return nil
@@ -247,7 +247,7 @@ struct PortfolioView: View {
             BatchSellSheetView(
                 positions: selectedPositions,
                 currentPrice: { pos in
-                    stockViewModel.stocks.first(where: { $0.code == pos.code })?.price ?? pos.currentPrice
+                    stockViewModel.allStocks.first(where: { $0.code == pos.code })?.price ?? pos.currentPrice
                 },
                 isPresented: $showBatchSellSheet,
                 onConfirm: { quantities in

@@ -932,17 +932,28 @@ def update_incremental_financial():
         print(f"[增量财务] 出错: {e}")
 
 def start_scheduler():
-    """启动定时任务调度器"""
-    scheduler = BackgroundScheduler()
+    """启动定时任务调度器（持久化存储，重启后保留任务状态）"""
+    from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+    from apscheduler.executors.pool import ThreadPoolExecutor
+
+    jobstores = {
+        'default': SQLAlchemyJobStore(url='mysql+pymysql://root:@localhost/select_stocks')
+    }
+    executors = {
+        'default': ThreadPoolExecutor(max_workers=1)
+    }
+
+    scheduler = BackgroundScheduler(jobstores=jobstores, executors=executors)
 
     # 每日16:00执行（更新日K → 聚合周K/月K → 选股 → 财务 → 分析）
-    scheduler.add_job(daily_task, 'cron', hour=16, minute=0, id='daily_task')
+    scheduler.add_job(daily_task, 'cron', hour=16, minute=0, id='daily_task',
+                      replace_existing=True)
 
     # # 每小时增量更新财务数据（已禁用）
     # scheduler.add_job(update_incremental_financial, 'interval', hours=1, id='incremental_financial')
 
     scheduler.start()
-    print("[调度器] 定时任务已启动")
+    print("[调度器] 定时任务已启动 (持久化存储)")
     print("  - 每日16:00: 更新日K → 聚合周K/月K → 选股 → 财务数据 → 分析")
 
 if __name__ == '__main__':

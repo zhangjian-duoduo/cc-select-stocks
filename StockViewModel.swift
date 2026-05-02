@@ -19,7 +19,7 @@ enum SortOption: String, CaseIterable {
 class StockViewModel: ObservableObject {
     @Published var stocks: [Stock] = []
     @Published var filteredStocks: [Stock] = []
-    private var allStocks: [Stock] = []  // 完整股票列表，不受筛选影响
+    private(set) var allStocks: [Stock] = []  // 完整股票列表，不受筛选影响
     @Published var financialUpdateStocks: [Stock] = []  // 今日财务数据更新的股票
     @Published var isLoading = false
     @Published var isLoadingFinancialUpdates = false
@@ -76,6 +76,12 @@ class StockViewModel: ObservableObject {
     func saveFiltersDirectly(_ filters: Set<String>) {
         skipFilterApply = true
         activeFilters = filters
+        skipFilterApply = false
+    }
+
+    func clearFilters() {
+        skipFilterApply = true
+        activeFilters = []
         skipFilterApply = false
     }
 
@@ -336,8 +342,8 @@ class StockViewModel: ObservableObject {
     // 获取所有持仓列表（按实时收益率排序）
     var positionList: [Position] {
         Array(positions.values).sorted { a, b in
-            let p0 = stocks.first(where: { s in s.code == a.code })?.price ?? a.currentPrice
-            let p1 = stocks.first(where: { s in s.code == b.code })?.price ?? b.currentPrice
+            let p0 = allStocks.first(where: { s in s.code == a.code })?.price ?? a.currentPrice
+            let p1 = allStocks.first(where: { s in s.code == b.code })?.price ?? b.currentPrice
             return a.realTimeReturnPct(p0) > b.realTimeReturnPct(p1)
         }
     }
@@ -345,7 +351,7 @@ class StockViewModel: ObservableObject {
     // 更新持仓的当前价格（用于计算盈亏）
     func updatePositionPrices() {
         for (code, var position) in positions {
-            if let stock = stocks.first(where: { $0.code == code }),
+            if let stock = allStocks.first(where: { $0.code == code }),
                let price = stock.price {
                 position.currentPrice = price
                 positions[code] = position
@@ -356,7 +362,7 @@ class StockViewModel: ObservableObject {
     // 总盈亏（实时价格计算）
     var totalReturn: Double {
         positions.values.reduce(0) { acc, pos in
-            let price = stocks.first(where: { s in s.code == pos.code })?.price ?? pos.currentPrice
+            let price = allStocks.first(where: { s in s.code == pos.code })?.price ?? pos.currentPrice
             return acc + pos.realTimePositionReturn(price)
         }
     }
@@ -499,7 +505,7 @@ class StockViewModel: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 60
+        request.timeoutInterval = 180
 
         do {
             let body = ["filters": Array(filters)]
@@ -760,7 +766,8 @@ class StockViewModel: ObservableObject {
             favorites.remove(stock.code)
         } else {
             favorites.insert(stock.code)
-            if let price = stock.price {
+            let price = stock.price ?? allStocks.first(where: { $0.code == stock.code })?.price
+            if let price = price {
                 favoriteEntryPrices[stock.code] = price
                 favoriteStockData[stock.code] = CachedStockData(name: stock.name, price: price)
             }

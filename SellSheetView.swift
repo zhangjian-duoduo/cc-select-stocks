@@ -9,7 +9,7 @@ struct SellSheetView: View {
 
     // 获取最新价格
     private var currentPrice: Double {
-        stockViewModel.stocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
+        stockViewModel.allStocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
     }
 
     var body: some View {
