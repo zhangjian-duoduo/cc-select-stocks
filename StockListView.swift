@@ -4,8 +4,12 @@ import UIKit
 
 struct StockListView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
-    @State private var selectedStockIndex: Int = 0
+    @State private var selectedStockCode: String = ""
     @State private var showDetailPage = false
+
+    private var resolvedStockIndex: Int {
+        stockViewModel.filteredStocks.firstIndex(where: { $0.code == selectedStockCode }) ?? 0
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -64,7 +68,7 @@ struct StockListView: View {
                 List {
                     ForEach(Array(stockViewModel.filteredStocks.enumerated()), id: \.element.code) { index, stock in
                         Button {
-                            selectedStockIndex = index
+                            selectedStockCode = stock.code
                             showDetailPage = true
                         } label: {
                             StockCard(stock: stock, sortOption: stockViewModel.sortOption)
@@ -97,11 +101,12 @@ struct StockListView: View {
             await stockViewModel.refresh()
         }
         .navigationDestination(isPresented: $showDetailPage) {
-            if selectedStockIndex < stockViewModel.filteredStocks.count {
+            let idx = resolvedStockIndex
+            if idx < stockViewModel.filteredStocks.count {
                 StockDetailPageView(
-                    currentIndex: selectedStockIndex,
+                    currentIndex: idx,
                     allStocks: stockViewModel.filteredStocks,
-                    currentPage: $selectedStockIndex
+                    currentPage: .constant(idx)
                 )
             }
         }
