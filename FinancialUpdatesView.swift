@@ -282,7 +282,8 @@ struct FinancialUpdatesView: View {
                         await MainActor.run {
                             datesWithData = dates
                             monthData = monthDataDict
-                            let today = String(format: "%04d-%02d-%02d", currentYear, currentMonth, calendar.component(.day, from: displayedDate))
+                            let now = Date()
+                            let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
                             if dates.contains(today) {
                                 selectedDate = today
                             } else if let first = dates.first {

@@ -60,10 +60,11 @@ def get_stocks():
             LEFT JOIN stock_analysis a ON s.code = a.code
             LEFT JOIN (
                 SELECT code, net_profit_yoy, net_profit_qoq
-                FROM stock_financial_history
-                WHERE (code, report_date) IN (
-                    SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
-                )
+                FROM (
+                    SELECT code, net_profit_yoy, net_profit_qoq,
+                           ROW_NUMBER() OVER (PARTITION BY code ORDER BY report_date DESC) as rn
+                    FROM stock_financial_history
+                ) t WHERE t.rn = 1
             ) f ON s.code = f.code
             ORDER BY s.selected_at DESC
             LIMIT %s OFFSET %s
@@ -1482,7 +1483,7 @@ def get_stocks_batch():
                    a.macd_divergence, a.trend_analysis, a.price_position, a.roe,
                    f.net_profit_yoy, f.net_profit_qoq
             FROM (
-                SELECT k.code, k.close, k.date
+                SELECT CONVERT(k.code USING utf8mb4) as code, k.close, k.date
                 FROM stock_kline k
                 INNER JOIN (
                     SELECT code, MAX(date) as max_date
@@ -1491,16 +1492,17 @@ def get_stocks_batch():
                     GROUP BY code
                 ) m ON k.code = m.code AND k.date = m.max_date AND k.period = 'daily'
             ) t
-            LEFT JOIN stock_names n ON CONVERT(t.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
-            LEFT JOIN stocks s ON CONVERT(t.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
-            LEFT JOIN stock_analysis a ON CONVERT(t.code USING utf8mb4) = CONVERT(a.code USING utf8mb4)
+            LEFT JOIN stock_names n ON t.code = CONVERT(n.code USING utf8mb4)
+            LEFT JOIN stocks s ON t.code = s.code
+            LEFT JOIN stock_analysis a ON t.code = a.code
             LEFT JOIN (
                 SELECT code, net_profit_yoy, net_profit_qoq
-                FROM stock_financial_history
-                WHERE (code, report_date) IN (
-                    SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
-                )
-            ) f ON CONVERT(t.code USING utf8mb4) = CONVERT(f.code USING utf8mb4)
+                FROM (
+                    SELECT code, net_profit_yoy, net_profit_qoq,
+                           ROW_NUMBER() OVER (PARTITION BY code ORDER BY report_date DESC) as rn
+                    FROM stock_financial_history
+                ) t WHERE t.rn = 1
+            ) f ON t.code = f.code
         """, codes)
 
         rows = cursor.fetchall()
@@ -1560,10 +1562,11 @@ def get_stocks_batch():
                 LEFT JOIN stock_analysis a ON s.code = a.code
                 LEFT JOIN (
                     SELECT code, net_profit_yoy, net_profit_qoq
-                    FROM stock_financial_history
-                    WHERE (code, report_date) IN (
-                        SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
-                    )
+                    FROM (
+                        SELECT code, net_profit_yoy, net_profit_qoq,
+                               ROW_NUMBER() OVER (PARTITION BY code ORDER BY report_date DESC) as rn
+                        FROM stock_financial_history
+                    ) t WHERE t.rn = 1
                 ) f ON s.code = f.code
                 WHERE s.code IN ({m_placeholders})
             """, missing)
@@ -1997,7 +2000,7 @@ def get_financial_updates():
                    s.price, s.change_pct
             FROM daily_financial_updates d
             LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
-            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
+            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = s.code
             WHERE d.updated_date = %s
             ORDER BY d.{sort_by} {order.upper()}
         """, (today,))
@@ -2073,7 +2076,7 @@ def get_financial_updates_by_date(date_str):
                    s.price, s.change_pct
             FROM daily_financial_updates d
             LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
-            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
+            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = s.code
             WHERE d.updated_date = %s
             ORDER BY d.{sort_by} {order.upper()}
         """, (date_str,))

@@ -53,7 +53,6 @@ struct ChangesView: View {
     @State private var errorMessage: String?
     @State private var selectedTab = 0
     @State private var selectedDate: String = ""
-    @State private var selectedMonth: String = ""
     @State private var isCalendarExpanded = false
     @State private var displayedDate: Date = Date()
 
@@ -197,8 +196,8 @@ struct ChangesView: View {
                             .font(.subheadline)
                             .padding(.horizontal, 16)
                             .padding(.vertical, 8)
-                            .background(selectedMonth == currentYearMonth ? Color(hex: "1E88E5") : Color(hex: "1E1E1E"))
-                            .foregroundColor(selectedMonth == currentYearMonth ? .white : .gray)
+                            .background(Color(hex: "1E88E5"))
+                            .foregroundColor(.white)
                             .cornerRadius(8)
                     }
 
@@ -357,7 +356,6 @@ struct ChangesView: View {
         .navigationTitle("每日变化")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            selectedMonth = currentYearMonth
             loadMonthData(month: currentYearMonth)
         }
     }
@@ -365,7 +363,6 @@ struct ChangesView: View {
     private func goToPreviousMonth() {
         if let newDate = calendar.date(byAdding: .month, value: -1, to: displayedDate) {
             displayedDate = newDate
-            selectedMonth = currentYearMonth
             loadMonthData(month: currentYearMonth)
         }
     }
@@ -374,7 +371,6 @@ struct ChangesView: View {
         guard canGoNext else { return }
         if let newDate = calendar.date(byAdding: .month, value: 1, to: displayedDate) {
             displayedDate = newDate
-            selectedMonth = currentYearMonth
             loadMonthData(month: currentYearMonth)
         }
     }
@@ -422,7 +418,7 @@ struct ChangeRow: View {
             }
 
             Image(systemName: isNew ? "arrow.up.circle.fill" : "arrow.down.circle.fill")
-                .foregroundColor(isNew ? Color(hex: "4CAF50") : Color(hex: "F44336"))
+                .foregroundColor(Color(hex: "1E88E5"))
                 .font(.title2)
         }
         .padding(.vertical, 8)
