@@ -613,3 +613,5 @@ struct SortMetricView: View {
         .padding(.vertical, 0)
         .background(isHighlighted ? color.opacity(0.2) : Color.clear)
         .cornerRadius(6)
+    }
+}
