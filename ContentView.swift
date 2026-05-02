@@ -46,6 +46,13 @@ struct ContentView: View {
             .tabItem {
                 Label("变化", systemImage: "arrow.left.arrow.right")
             }
+
+            NavigationStack {
+                RemovedView()
+            }
+            .tabItem {
+                Label("剔除", systemImage: "trash")
+            }
         }
         .tint(Color(hex: "1E88E5"))
     }

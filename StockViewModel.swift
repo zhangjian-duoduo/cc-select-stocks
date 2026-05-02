@@ -63,12 +63,12 @@ class StockViewModel: ObservableObject {
     @Published var activeFilters: Set<String> = [] {
         didSet {
             saveFilters()
-            // 如果有活跃筛选，应用它们（跳过刚设置完筛选的重复调用）
             if !activeFilters.isEmpty && !skipFilterApply {
                 Task {
                     await applyServerFilters(activeFilters)
                 }
             }
+            skipFilterApply = false
         }
     }
 
@@ -76,13 +76,11 @@ class StockViewModel: ObservableObject {
     func saveFiltersDirectly(_ filters: Set<String>) {
         skipFilterApply = true
         activeFilters = filters
-        skipFilterApply = false
     }
 
     func clearFilters() {
         skipFilterApply = true
         activeFilters = []
-        skipFilterApply = false
     }
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
