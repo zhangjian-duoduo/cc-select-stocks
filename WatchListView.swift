@@ -178,6 +178,7 @@ struct BatchBuySheetView: View {
     let onConfirm: ([String: String]) -> Void
 
     @State private var quantities: [String: String] = [:]
+    @State private var errorMessage: String?
 
     var totalAmount: Double {
         stocks.reduce(0) { total, stock in
@@ -278,6 +279,13 @@ struct BatchBuySheetView: View {
 
                 // 底部汇总
                 VStack(spacing: 8) {
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(Color(hex: "FF9800"))
+                            .padding(.horizontal)
+                    }
+
                     HStack {
                         Text("合计金额")
                             .font(.subheadline)
@@ -291,8 +299,23 @@ struct BatchBuySheetView: View {
                     .padding(.horizontal)
 
                     Button {
-                        onConfirm(quantities)
-                        isPresented = false
+                        errorMessage = nil
+                        var hasError = false
+                        for stock in stocks {
+                            let qtyStr = quantities[stock.code] ?? ""
+                            guard let qty = Int(qtyStr) else {
+                                errorMessage = "\(stock.name): 请输入有效数字"
+                                hasError = true; break
+                            }
+                            guard qty >= 100, qty % 100 == 0 else {
+                                errorMessage = "\(stock.name): 数量须为100的整数倍"
+                                hasError = true; break
+                            }
+                        }
+                        if !hasError {
+                            onConfirm(quantities)
+                            isPresented = false
+                        }
                     } label: {
                         Text("确认买入")
                             .font(.headline)

@@ -25,7 +25,7 @@ struct RemovedView: View {
     @State private var selectedStockIndex: Int = 0
     @State private var showDetailPage = false
 
-    private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let baseURL = AppConfig.baseURL
 
     var sortedDates: [String] {
         (removedData.keys).sorted(by: >)

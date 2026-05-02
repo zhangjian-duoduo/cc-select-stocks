@@ -22,7 +22,7 @@ struct FilterView: View {
     @State private var isLoading = false
     @State private var filteredCount: Int? = nil
 
-    private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let baseURL = AppConfig.baseURL
 
     var body: some View {
         ScrollView {

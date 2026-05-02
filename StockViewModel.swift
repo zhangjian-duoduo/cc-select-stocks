@@ -2,6 +2,10 @@ import Foundation
 import Combine
 import SwiftUI
 
+struct AppConfig {
+    static let baseURL = "http://8.163.91.16:5000/api/v1"
+}
+
 enum SortOption: String, CaseIterable {
     case position = "位置"
     case score = "评分"
@@ -83,7 +87,7 @@ class StockViewModel: ObservableObject {
         activeFilters = []
     }
 
-    private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let baseURL = AppConfig.baseURL
     private let favoritesKey = "favorited_stocks"
     private let filtersKey = "active_filters"
     private let filtersLastAppliedKey = "filters_last_applied"

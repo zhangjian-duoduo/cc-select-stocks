@@ -57,7 +57,7 @@ struct ChangesView: View {
     @State private var isCalendarExpanded = false
     @State private var displayedDate: Date = Date()
 
-    private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let baseURL = AppConfig.baseURL
 
     private let calendar = Calendar.current
 

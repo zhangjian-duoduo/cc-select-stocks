@@ -9,6 +9,7 @@ struct PortfolioView: View {
     @State private var selectedCodes: Set<String> = []
     @State private var showBatchBuySheet = false
     @State private var showBatchSellSheet = false
+    @State private var showTradeHistory = false
 
     private func currentPrice(for position: Position) -> Double {
         stockViewModel.allStocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
@@ -165,6 +166,14 @@ struct PortfolioView: View {
         .background(Color(hex: "121212"))
         .navigationTitle("持仓")
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                Button {
+                    showTradeHistory = true
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundColor(Color(hex: "1E88E5"))
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if !stockViewModel.positionList.isEmpty {
                     Button(isSelectionMode ? "取消" : "选择") {
@@ -176,6 +185,9 @@ struct PortfolioView: View {
                     .foregroundColor(Color(hex: "1E88E5"))
                 }
             }
+        }
+        .sheet(isPresented: $showTradeHistory) {
+            TradeHistoryView(trades: stockViewModel.trades.reversed())
         }
         .safeAreaInset(edge: .bottom) {
             if isSelectionMode && !selectedCodes.isEmpty {
@@ -278,6 +290,7 @@ struct BatchSellSheetView: View {
     let onConfirm: ([String: String]) -> Void
 
     @State private var quantities: [String: String] = [:]
+    @State private var errorMessage: String?
 
     var totalAmount: Double {
         positions.reduce(0) { total, pos in
@@ -299,6 +312,7 @@ struct BatchSellSheetView: View {
                         .foregroundColor(.gray)
                     ForEach(["1/4", "1/3", "1/2", "全仓"], id: \.self) { label in
                         Button {
+                            errorMessage = nil
                             var copy = quantities
                             for pos in positions {
                                 let targetQty: Int
@@ -432,6 +446,13 @@ struct BatchSellSheetView: View {
                 .listRowBackground(Color(hex: "1E1E1E"))
 
                 VStack(spacing: 8) {
+                    if let error = errorMessage {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(Color(hex: "FF9800"))
+                            .padding(.horizontal)
+                    }
+
                     HStack {
                         Text("预计回收金额")
                             .font(.subheadline)
@@ -445,8 +466,27 @@ struct BatchSellSheetView: View {
                     .padding(.horizontal)
 
                     Button {
-                        onConfirm(quantities)
-                        isPresented = false
+                        errorMessage = nil
+                        var hasError = false
+                        for pos in positions {
+                            let qtyStr = quantities[pos.code] ?? ""
+                            guard let qty = Int(qtyStr) else {
+                                errorMessage = "\(pos.name): 请输入有效数字"
+                                hasError = true; break
+                            }
+                            guard qty >= 100, qty % 100 == 0 else {
+                                errorMessage = "\(pos.name): 数量须为100的整数倍"
+                                hasError = true; break
+                            }
+                            guard qty <= pos.quantity else {
+                                errorMessage = "\(pos.name): 超出持仓(\(pos.quantity)股)"
+                                hasError = true; break
+                            }
+                        }
+                        if !hasError {
+                            onConfirm(quantities)
+                            isPresented = false
+                        }
                     } label: {
                         Text("确认卖出")
                             .font(.headline)
@@ -478,6 +518,54 @@ struct BatchSellSheetView: View {
                 }
                 quantities = dict
             }
+        }
+    }
+}
+
+// 交易记录视图
+struct TradeHistoryView: View {
+    let trades: [Trade]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if trades.isEmpty {
+                    Text("暂无交易记录")
+                        .foregroundColor(.gray)
+                        .listRowBackground(Color(hex: "1E1E1E"))
+                } else {
+                    ForEach(trades) { trade in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(trade.name)
+                                    .font(.headline)
+                                    .foregroundColor(.white)
+                                Text(trade.code)
+                                    .font(.caption)
+                                    .foregroundColor(.gray)
+                            }
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(trade.isBuy ? "买入" : "卖出")
+                                    .font(.caption)
+                                    .foregroundColor(trade.isBuy ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                                Text("\(trade.quantity)股 @ ¥\(String(format: "%.2f", trade.price))")
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                                Text(trade.date, style: .date)
+                                    .font(.caption2)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .listRowBackground(Color(hex: "1E1E1E"))
+                    }
+                }
+            }
+            .listStyle(.plain)
+            .background(Color(hex: "121212"))
+            .navigationTitle("交易记录")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 }

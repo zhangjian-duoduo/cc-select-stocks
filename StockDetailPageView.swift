@@ -14,7 +14,7 @@ struct StockDetailPageView: View {
     @State private var selectedKlineIndex: Int? = nil
     @State private var selectedFinancialIndex: Int? = nil
 
-    private let baseURL = "http://8.163.91.16:5000/api/v1"
+    private let baseURL = AppConfig.baseURL
 
     enum KlinePeriod: String, CaseIterable {
         case daily = "日"
@@ -82,6 +82,11 @@ struct StockDetailPageView: View {
                 loadFinancialHistory(code)
             }
         }
+        // 淘汰远离当前页的缓存，防止内存无界增长
+        let keepRange = max(0, newPage - 3)...min(allStocks.count - 1, newPage + 3)
+        let keepCodes = Set(keepRange.map { allStocks[$0].code })
+        detailedStocks = detailedStocks.filter { keepCodes.contains($0.key) }
+        financialHistoryStocks = financialHistoryStocks.filter { keepCodes.contains($0.key) }
     }
 
     private func loadStockDetail(_ stockCode: String) {
