@@ -109,16 +109,18 @@ def get_all_stock_codes() -> list:
     bs.logout()
     return stocks
 
-def fetch_kline_data(stock_code: str, period: str = 'daily', latest_only: bool = False) -> Optional[pd.DataFrame]:
+def fetch_kline_data(stock_code: str, period: str = 'daily', latest_only: bool = False,
+                     days_back: int = None) -> Optional[pd.DataFrame]:
     """获取单只股票的K线数据
     双平台：baostock(优先) → akshare(备用)
     latest_only: True=只获取最新数据, False=获取全部历史数据
+    days_back: 拉取最近N天的数据（优先级高于 latest_only）
     """
     import sys
 
     # 先尝试baostock
     try:
-        result = _fetch_baostock(stock_code, period, latest_only)
+        result = _fetch_baostock(stock_code, period, latest_only, days_back)
         if result is not None and not result.empty:
             sys.stdout.flush()
             return result
@@ -136,7 +138,8 @@ def fetch_kline_data(stock_code: str, period: str = 'daily', latest_only: bool =
 
     return None
 
-def _fetch_baostock(stock_code: str, period: str, latest_only: bool) -> Optional[pd.DataFrame]:
+def _fetch_baostock(stock_code: str, period: str, latest_only: bool = False,
+                    days_back: int = None) -> Optional[pd.DataFrame]:
     """baostock获取K线数据"""
     try:
         lg = bs.login()
@@ -155,7 +158,9 @@ def _fetch_baostock(stock_code: str, period: str, latest_only: bool) -> Optional
         bs_code = f'sh.{stock_code}' if stock_code.startswith('6') else f'sz.{stock_code}'
 
         # 根据参数决定获取多少数据
-        if latest_only:
+        if days_back is not None:
+            start_date = (datetime.now() - timedelta(days=days_back)).strftime('%Y-%m-%d')
+        elif latest_only:
             # 只需要最新数据 - 快速获取
             if period == 'daily':
                 start_date = (datetime.now() - timedelta(days=10)).strftime('%Y-%m-%d')
@@ -275,6 +280,12 @@ def save_kline_to_db(df: pd.DataFrame, stock_code: str, period: str, retry: int 
         try:
             for _, row in df.iterrows():
                 try:
+                    # 清理NaN值，防止MySQL报错
+                    import math
+                    def clean_val(v):
+                        if v is None or (isinstance(v, float) and math.isnan(v)):
+                            return None
+                        return v
                     cursor.execute("""
                         INSERT INTO stock_kline (code, date, open, high, low, close, volume, amount, period)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -289,12 +300,12 @@ def save_kline_to_db(df: pd.DataFrame, stock_code: str, period: str, retry: int 
                     """, (
                         stock_code,
                         row['date'],
-                        row['open'],
-                        row['high'],
-                        row['low'],
-                        row['close'],
+                        clean_val(row['open']),
+                        clean_val(row['high']),
+                        clean_val(row['low']),
+                        clean_val(row['close']),
                         int(row['volume']) if pd.notna(row['volume']) else 0,
-                        row['amount'],
+                        clean_val(row['amount']),
                         period
                     ))
                     saved += 1
@@ -355,41 +366,94 @@ def init_all_kline_data(stock_limit: int = None):
     print(f"[初始化] 完成！共保存 {total_saved} 条K线数据")
 
 def update_today_kline():
-    """更新当日K线数据（增量更新）"""
-    print("[更新] 开始更新当日K线数据...")
+    """更新K线数据 - 自动检测除权除息并修正历史数据
+
+    前复权数据在每次除权后，复权因子会变，历史价格需要等比调整。
+    如果只增量追加新行不修正历史行，会导致前后价格断裂，
+    选股算法会把除权股误判为"历史低位"。
+
+    策略：
+    1. 每只股票拉最近90天日K，取45天前的收盘价跟数据库对比
+    2. 偏差超过1% → 复权因子已变 → 全量重拉日K/周K/月K
+    3. 偏差未超过 → 正常增量更新最近90天日K
+    """
+    print("[更新] 开始更新K线数据...")
 
     conn = get_db()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
-        # 获取所有股票代码
         cursor.execute("SELECT DISTINCT code FROM stock_kline")
         stocks = [row['code'] for row in cursor.fetchall()]
 
         print(f"[更新] 共 {len(stocks)} 只股票")
 
-        periods = ['daily']  # 只需要更新日K
-
         total_updated = 0
+        ex_rights_count = 0
+
         for i, code in enumerate(stocks):
-            print(f"[更新] ({i+1}/{len(stocks)}) 更新 {code}...")
+            try:
+                time.sleep(0.35)
 
-            for period in periods:
-                try:
-                    time.sleep(0.35)  # 间隔，避免被封
-
-                    df = fetch_kline_data(code, period)
-                    if df is not None and not df.empty:
-                        # 只取最新的数据
-                        latest = df.tail(1)
-                        saved = save_kline_to_db(latest, code, period)
-                        if saved > 0:
-                            total_updated += 1
-                except Exception as e:
-                    print(f"  - 失败: {e}")
+                # 1. 拉取最近90天日K（用于检测除权 + 日常更新）
+                df_recent = fetch_kline_data(code, 'daily', days_back=90)
+                if df_recent is None or df_recent.empty:
                     continue
 
-        print(f"[更新] 完成！共更新 {total_updated} 只股票")
+                # 2. 在多处对比baostock和数据库，检测复权因子变化
+                #    复权因子变了会影响所有历史价格，所以查最早日期
+                #    同时也查最新日期，防止baostock数据修正等边界情况
+                df_sorted = df_recent.sort_values('date')
+                need_full_refresh = False
+
+                # 取最早、中间、最新三个位置做对比
+                check_indices = [0, len(df_sorted) // 2, len(df_sorted) - 1]
+                for check_idx in check_indices:
+                    if need_full_refresh:
+                        break
+                    ref_row = df_sorted.iloc[check_idx]
+                    ref_date = str(ref_row['date'])[:10]
+                    ref_close = float(ref_row['close'])
+                    if ref_close <= 0:
+                        continue
+
+                    cursor.execute(
+                        "SELECT close FROM stock_kline WHERE code=%s AND date=%s AND period='daily'",
+                        (code, ref_date)
+                    )
+                    db_row = cursor.fetchone()
+                    if db_row:
+                        old_close = float(db_row['close'])
+                        if old_close > 0:
+                            diff = abs(ref_close - old_close) / old_close
+                            if diff > 0.01:
+                                need_full_refresh = True
+                                print(f"  [除权] {code} 复权因子变化: {ref_date} "
+                                      f"{old_close:.2f} → {ref_close:.2f} (偏差{diff:.1%})")
+
+                if need_full_refresh:
+                    # 3a. 复权因子变了，重拉全部日K+周K+月K
+                    ex_rights_count += 1
+                    for period in ['daily', 'weekly', 'monthly']:
+                        time.sleep(0.35)
+                        df_full = fetch_kline_data(code, period)
+                        if df_full is not None and not df_full.empty:
+                            saved = save_kline_to_db(df_full, code, period)
+                            total_updated += saved
+                    print(f"  [除权] {code} 全量重拉完成")
+                else:
+                    # 3b. 正常更新：只写入最近90天日K
+                    saved = save_kline_to_db(df_recent, code, 'daily')
+                    total_updated += saved
+
+                if (i + 1) % 500 == 0:
+                    print(f"[更新] 进度 {i+1}/{len(stocks)}, 已更新 {total_updated} 条, 检测除权 {ex_rights_count} 只")
+
+            except Exception as e:
+                print(f"  [{code}] 失败: {e}")
+                continue
+
+        print(f"[更新] 完成！更新 {total_updated} 条，检测除权 {ex_rights_count} 只")
 
     finally:
         cursor.close()

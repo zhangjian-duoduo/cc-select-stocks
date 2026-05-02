@@ -44,8 +44,9 @@ struct SellSheetView: View {
                             .foregroundColor(.white)
                         Text("成本: ¥\(String(format: "%.2f", position.avgCost))")
                             .foregroundColor(.gray)
-                        Text("盈亏: \(String(format: "%@%.1f%%", position.returnPct >= 0 ? "+" : "", position.realTimeReturnPct(currentPrice)))")
-                            .foregroundColor(position.realTimeReturnPct(currentPrice) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                        let rtn = position.realTimeReturnPct(currentPrice)
+                        Text("盈亏: \(String(format: "%@%.1f%%", rtn >= 0 ? "+" : "", rtn))")
+                            .foregroundColor(rtn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
                     }
                     .font(.headline)
                 }
@@ -68,9 +69,10 @@ struct SellSheetView: View {
                 .cornerRadius(8)
 
                 Button {
-                    if let qty = Int(quantity), qty > 0, currentPrice > 0 {
-                        stockViewModel.sellStock(code: position.code, price: currentPrice, quantity: qty)
-                        isPresented = false
+                    if let qty = Int(quantity), qty >= 100, qty % 100 == 0, currentPrice > 0 {
+                        if stockViewModel.sellStock(code: position.code, price: currentPrice, quantity: qty) {
+                            isPresented = false
+                        }
                     }
                 } label: {
                     Text("确认卖出")
@@ -97,7 +99,8 @@ struct SellSheetView: View {
                     }
 
                     Button {
-                        quantity = String(position.quantity / 2)
+                        let half = (position.quantity / 200) * 100
+                        if half >= 100 { quantity = String(half) }
                     } label: {
                         Text("1/2")
                             .font(.caption)

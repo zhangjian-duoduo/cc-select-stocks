@@ -33,6 +33,7 @@ struct TradeSheetView: View {
 
                 // 持仓信息
                 if let position = stockViewModel.getPosition(stock.code) {
+                    let currentPrice = stock.price ?? position.currentPrice
                     VStack(spacing: 4) {
                         Text("当前持仓")
                             .font(.subheadline)
@@ -42,8 +43,9 @@ struct TradeSheetView: View {
                                 .foregroundColor(.white)
                             Text("成本: ¥\(String(format: "%.2f", position.avgCost))")
                                 .foregroundColor(.gray)
-                            Text("盈亏: \(String(format: "%@%.1f%%", position.returnPct >= 0 ? "+" : "", position.returnPct))")
-                                .foregroundColor(position.returnPct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                            let rtn = position.realTimeReturnPct(currentPrice)
+                            Text("盈亏: \(String(format: "%@%.1f%%", rtn >= 0 ? "+" : "", rtn))")
+                                .foregroundColor(rtn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
                         }
                         .font(.headline)
                     }
@@ -76,15 +78,17 @@ struct TradeSheetView: View {
 
                 // 确认按钮
                 Button {
-                    if let qty = Int(quantity), qty > 0, let price = stock.price {
+                    if let qty = Int(quantity), qty >= 100, qty % 100 == 0, let price = stock.price {
                         if selectedAction == 0 {
                             // 买入
                             stockViewModel.buyStock(code: stock.code, name: stock.name, price: price, quantity: qty)
+                            isPresented = false
                         } else {
-                            // 卖出
-                            stockViewModel.sellStock(code: stock.code, price: price, quantity: qty)
+                            // 卖出：只有成功才关闭
+                            if stockViewModel.sellStock(code: stock.code, price: price, quantity: qty) {
+                                isPresented = false
+                            }
                         }
-                        isPresented = false
                     }
                 } label: {
                     Text(selectedAction == 0 ? "确认买入" : "确认卖出")

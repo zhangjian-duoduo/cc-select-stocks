@@ -13,27 +13,6 @@ struct ContentView: View {
             }
 
             NavigationStack {
-                FinancialUpdatesView()
-            }
-            .tabItem {
-                Label("财务", systemImage: "dollarsign.circle")
-            }
-
-            NavigationStack {
-                ChangesView()
-            }
-            .tabItem {
-                Label("变化", systemImage: "arrow.left.arrow.right")
-            }
-
-            NavigationStack {
-                FilterView()
-            }
-            .tabItem {
-                Label("筛选", systemImage: "slider.horizontal.3")
-            }
-
-            NavigationStack {
                 WatchListView()
             }
             .tabItem {
@@ -45,6 +24,27 @@ struct ContentView: View {
             }
             .tabItem {
                 Label("持仓", systemImage: "chart.pie.fill")
+            }
+
+            NavigationStack {
+                FilterView()
+            }
+            .tabItem {
+                Label("筛选", systemImage: "slider.horizontal.3")
+            }
+
+            NavigationStack {
+                FinancialUpdatesView()
+            }
+            .tabItem {
+                Label("财务", systemImage: "dollarsign.circle")
+            }
+
+            NavigationStack {
+                ChangesView()
+            }
+            .tabItem {
+                Label("变化", systemImage: "arrow.left.arrow.right")
             }
         }
         .tint(Color(hex: "1E88E5"))

@@ -25,21 +25,23 @@ struct StockDetailPageView: View {
     // 打开东方财富App
     func openInEastMoney(code: String) {
         guard code.count == 6 else { return }
-        let prefix = code.hasPrefix("6") ? "SH" : "SZ"
-        let symbol = "\(prefix)\(code)"
 
-        // 先尝试打开东方财富App
-        if let appUrl = URL(string: "eastmoney://quote?symbol=\(symbol)") {
-            if UIApplication.shared.canOpenURL(appUrl) {
-                UIApplication.shared.open(appUrl)
-                return
-            }
+        let prefix: String
+        if code.hasPrefix("6") || code.hasPrefix("9") || code.hasPrefix("688") {
+            prefix = "sh"
+        } else {
+            prefix = "sz"
         }
 
-        // App没安装就用网页版
-        let webUrlString = "https://quote.eastmoney.com/\(symbol.lowercased()).html"
-        if let webUrl = URL(string: webUrlString) {
-            UIApplication.shared.open(webUrl)
+        let appScheme = "eastmoney://"
+        let webURL = "https://quote.eastmoney.com/\(prefix)\(code).html"
+
+        if let url = URL(string: appScheme), UIApplication.shared.canOpenURL(url) {
+            // 唤起App同时复制股票代码，方便在App里粘贴搜索
+            UIPasteboard.general.string = code
+            UIApplication.shared.open(url)
+        } else if let url = URL(string: webURL) {
+            UIApplication.shared.open(url)
         }
     }
 
@@ -152,37 +154,21 @@ struct StockDetailContent: View {
         let code = stock.code ?? ""
         guard code.count == 6 else { return }
 
-        // 市场代码：沪市=1，深市=0
-        let marketPrefix = code.hasPrefix("6") || code.hasPrefix("9") || code.hasPrefix("688") ? "1" : "0"
-        let secId = "\(marketPrefix).\(code)"
-
-        // 尝试多种URL Scheme格式
-        let schemes: [String] = [
-            // 使用secid格式（来自东方财富API的格式）
-            "eastmoney://quote?secid=\(secId)",
-            "eastmoney://quotation?secid=\(secId)",
-            "eastmoney://stockdetail?secid=\(secId)",
-            "eastmoney://hq?secid=\(secId)",
-
-            // 备用格式
-            "eastmoney://stock?secid=\(secId)",
-            "emstock://quote?secid=\(secId)"
-        ]
-
-        for scheme in schemes {
-            if let url = URL(string: scheme) {
-                if UIApplication.shared.canOpenURL(url) {
-                    UIApplication.shared.open(url)
-                    return
-                }
-            }
+        let prefix: String
+        if code.hasPrefix("6") || code.hasPrefix("9") || code.hasPrefix("688") {
+            prefix = "sh"
+        } else {
+            prefix = "sz"
         }
 
-        // 如果App没安装，尝试网页版
-        let prefix = code.hasPrefix("6") ? "sh" : "sz"
-        let webCode = "\(prefix)\(code)"
-        if let webUrl = URL(string: "https://quote.eastmoney.com/\(webCode).html") {
-            UIApplication.shared.open(webUrl)
+        let appScheme = "eastmoney://"
+        let webURL = "https://quote.eastmoney.com/\(prefix)\(code).html"
+
+        if let url = URL(string: appScheme), UIApplication.shared.canOpenURL(url) {
+            UIPasteboard.general.string = code
+            UIApplication.shared.open(url)
+        } else if let url = URL(string: webURL) {
+            UIApplication.shared.open(url)
         }
     }
 

@@ -654,23 +654,21 @@ struct StockDetailView: View {
         let code = stock.code ?? ""
         guard code.count == 6 else { return }
 
-        // 转换股票代码格式：6开头是沪市，其他是深市
-        let prefix = code.hasPrefix("6") ? "SH" : "SZ"
-        let symbol = "\(prefix)\(code)"
-
-        // 先尝试打开东方财富App
-        if let appUrl = URL(string: "eastmoney://quote?symbol=\(symbol)") {
-            // 检查是否能打开App
-            if UIApplication.shared.canOpenURL(appUrl) {
-                UIApplication.shared.open(appUrl)
-                return
-            }
+        let prefix: String
+        if code.hasPrefix("6") || code.hasPrefix("9") || code.hasPrefix("688") {
+            prefix = "sh"
+        } else {
+            prefix = "sz"
         }
 
-        // App没安装就用网页版
-        let webUrlString = "https://quote.eastmoney.com/\(symbol.lowercased()).html"
-        if let webUrl = URL(string: webUrlString) {
-            UIApplication.shared.open(webUrl)
+        let appScheme = "eastmoney://"
+        let webURL = "https://quote.eastmoney.com/\(prefix)\(code).html"
+
+        if let url = URL(string: appScheme), UIApplication.shared.canOpenURL(url) {
+            UIPasteboard.general.string = code
+            UIApplication.shared.open(url)
+        } else if let url = URL(string: webURL) {
+            UIApplication.shared.open(url)
         }
     }
 

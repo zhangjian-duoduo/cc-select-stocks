@@ -15,9 +15,11 @@ enum SortOption: String, CaseIterable {
     case roe = "ROE"
 }
 
+@MainActor
 class StockViewModel: ObservableObject {
     @Published var stocks: [Stock] = []
     @Published var filteredStocks: [Stock] = []
+    private var allStocks: [Stock] = []  // 完整股票列表，不受筛选影响
     @Published var financialUpdateStocks: [Stock] = []  // 今日财务数据更新的股票
     @Published var isLoading = false
     @Published var isLoadingFinancialUpdates = false
@@ -49,17 +51,32 @@ class StockViewModel: ObservableObject {
         }
     }
 
+    // 缓存自选股的名称和最新价格，保证列表里没该股票时也能正常显示
+    @Published var favoriteStockData: [String: CachedStockData] = [:] {
+        didSet {
+            saveFavoriteStockData()
+        }
+    }
+
     // 保存当前活跃的筛选条件（在FilterView中设置）
+    private var skipFilterApply = false
     @Published var activeFilters: Set<String> = [] {
         didSet {
             saveFilters()
-            // 如果有活跃筛选，应用它们
-            if !activeFilters.isEmpty {
+            // 如果有活跃筛选，应用它们（跳过刚设置完筛选的重复调用）
+            if !activeFilters.isEmpty && !skipFilterApply {
                 Task {
                     await applyServerFilters(activeFilters)
                 }
             }
         }
+    }
+
+    /// 保存筛选条件但不触发重复的 API 调用（FilterView 已直接调用并设置结果）
+    func saveFiltersDirectly(_ filters: Set<String>) {
+        skipFilterApply = true
+        activeFilters = filters
+        skipFilterApply = false
     }
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
@@ -69,6 +86,7 @@ class StockViewModel: ObservableObject {
     private let sessionStartKey = "session_start"
     private let favoriteDatesKey = "favorite_dates"
     private let favoriteEntryPricesKey = "favorite_entry_prices"
+    private let favoriteStockDataKey = "favorite_stock_data"
 
     init() {
         // 记录本次会话开始时间
@@ -76,6 +94,7 @@ class StockViewModel: ObservableObject {
         loadFavorites()
         loadFavoriteDates()
         loadFavoriteEntryPrices()
+        loadFavoriteStockData()
         loadStoredFilters()
         loadPositions()
         loadTrades()
@@ -97,6 +116,78 @@ class StockViewModel: ObservableObject {
         UserDefaults.standard.set(favoriteEntryPrices, forKey: favoriteEntryPricesKey)
     }
 
+    private func loadFavoriteStockData() {
+        if let data = UserDefaults.standard.data(forKey: favoriteStockDataKey),
+           let saved = try? JSONDecoder().decode([String: CachedStockData].self, from: data) {
+            favoriteStockData = saved
+        }
+    }
+
+    private func saveFavoriteStockData() {
+        if let data = try? JSONEncoder().encode(favoriteStockData) {
+            UserDefaults.standard.set(data, forKey: favoriteStockDataKey)
+        }
+    }
+
+    // 用最新数据更新自选股缓存
+    private func refreshFavoriteStockData() {
+        for code in favorites {
+            if let stock = allStocks.first(where: { $0.code == code }),
+               let price = stock.price {
+                favoriteStockData[code] = CachedStockData(name: stock.name, price: price)
+            }
+        }
+    }
+
+    // 补全不在选股列表中的自选股数据
+    private func fetchMissingFavorites() async {
+        let missingCodes = favorites.filter { code in
+            !allStocks.contains(where: { $0.code == code })
+        }
+        guard !missingCodes.isEmpty else { return }
+
+        guard let url = URL(string: "\(baseURL)/stocks/batch") else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        do {
+            let body = ["codes": Array(missingCodes)]
+            request.httpBody = try JSONEncoder().encode(body)
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  httpResponse.statusCode == 200 else { return }
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let respCode = json["code"] as? Int, respCode == 0,
+                  let batchData = json["data"] as? [String: Any] else { return }
+
+            for (code, itemValue) in batchData {
+                guard var itemDict = itemValue as? [String: Any] else { continue }
+                // 确保code字段存在
+                if itemDict["code"] == nil {
+                    itemDict["code"] = code
+                }
+                // 将字典转为JSON data，再通过Stock的Codable解码
+                let itemData = try JSONSerialization.data(withJSONObject: itemDict)
+                if let stock = try? JSONDecoder().decode(Stock.self, from: itemData) {
+                    allStocks.append(stock)
+                }
+                // 同时更新缓存
+                let name = itemDict["name"] as? String ?? code
+                let price = itemDict["price"] as? Double ?? favoriteEntryPrices[code] ?? 0
+                favoriteStockData[code] = CachedStockData(name: name, price: price)
+            }
+            // 重新刷新自选股缓存，让 allStocks 中新增的股票被同步
+            refreshFavoriteStockData()
+        } catch {
+            print("补全自选股数据失败: \(error)")
+        }
+    }
+
     private func loadFavoriteDates() {
         if let saved = UserDefaults.standard.dictionary(forKey: favoriteDatesKey) as? [String: TimeInterval] {
             favoriteDates = saved.mapValues { Date(timeIntervalSince1970: $0) }
@@ -115,10 +206,11 @@ class StockViewModel: ObservableObject {
         if favoriteDates[code] == nil {
             favoriteDates[code] = Date()
         }
-        // 记录添加时的价格
-        if let stock = stocks.first(where: { $0.code == code }),
+        // 记录添加时的价格，并缓存名称+价格
+        if let stock = allStocks.first(where: { $0.code == code }),
            let price = stock.price {
             favoriteEntryPrices[code] = price
+            favoriteStockData[code] = CachedStockData(name: stock.name, price: price)
         }
     }
 
@@ -207,9 +299,10 @@ class StockViewModel: ObservableObject {
         savePositions()
     }
 
-    // 卖出股票
-    func sellStock(code: String, price: Double, quantity: Int) {
-        guard var position = positions[code], position.quantity >= quantity else { return }
+    // 卖出股票，返回是否成功
+    @discardableResult
+    func sellStock(code: String, price: Double, quantity: Int) -> Bool {
+        guard var position = positions[code], position.quantity >= quantity else { return false }
 
         // 记录交易
         let trade = Trade(
@@ -232,6 +325,7 @@ class StockViewModel: ObservableObject {
 
         saveTrades()
         savePositions()
+        return true
     }
 
     // 获取持仓
@@ -239,9 +333,13 @@ class StockViewModel: ObservableObject {
         positions[code]
     }
 
-    // 获取所有持仓列表
+    // 获取所有持仓列表（按实时收益率排序）
     var positionList: [Position] {
-        Array(positions.values).sorted { $0.returnPct > $1.returnPct }
+        Array(positions.values).sorted { a, b in
+            let p0 = stocks.first(where: { s in s.code == a.code })?.price ?? a.currentPrice
+            let p1 = stocks.first(where: { s in s.code == b.code })?.price ?? b.currentPrice
+            return a.realTimeReturnPct(p0) > b.realTimeReturnPct(p1)
+        }
     }
 
     // 更新持仓的当前价格（用于计算盈亏）
@@ -255,12 +353,15 @@ class StockViewModel: ObservableObject {
         }
     }
 
-    // 总盈亏
+    // 总盈亏（实时价格计算）
     var totalReturn: Double {
-        positions.values.reduce(0) { $0 + $1.positionReturn }
+        positions.values.reduce(0) { acc, pos in
+            let price = stocks.first(where: { s in s.code == pos.code })?.price ?? pos.currentPrice
+            return acc + pos.realTimePositionReturn(price)
+        }
     }
 
-    // 总收益率
+    // 总收益率（实时价格计算）
     var totalReturnPct: Double {
         let totalCost = positions.values.reduce(0.0) { $0 + $1.totalCost }
         guard totalCost > 0 else { return 0 }
@@ -302,7 +403,6 @@ class StockViewModel: ObservableObject {
     }
 
     // 更新实时价格
-    @MainActor
     func updatePrices() async {
         guard let url = URL(string: "\(baseURL)/update_prices") else { return }
 
@@ -319,7 +419,6 @@ class StockViewModel: ObservableObject {
         }
     }
 
-    @MainActor
     func loadData() async {
         isLoading = true
         errorMessage = nil
@@ -358,9 +457,13 @@ class StockViewModel: ObservableObject {
 
             let stockResponse = try JSONDecoder().decode(StockResponse.self, from: data)
             if stockResponse.code == 0 {
-                self.stocks = stockResponse.data ?? []
+                self.allStocks = stockResponse.data ?? []
+                self.stocks = self.allStocks
+                self.refreshFavoriteStockData()
                 self.applySort()
                 self.errorMessage = nil
+                // 补全不在选股列表中的自选股数据
+                await self.fetchMissingFavorites()
             } else {
                 self.errorMessage = "API错误: \(stockResponse.message ?? "未知错误")"
             }
@@ -387,7 +490,6 @@ class StockViewModel: ObservableObject {
     }
 
     // 调用后端API应用筛选
-    @MainActor
     func applyServerFilters(_ filters: Set<String>) async {
         guard !filters.isEmpty else { return }
         print("applyServerFilters: \(filters)")
@@ -419,7 +521,6 @@ class StockViewModel: ObservableObject {
         }
     }
 
-    @MainActor
     func refresh() async {
         // 保存当前筛选条件
         let savedFilters = activeFilters
@@ -433,7 +534,6 @@ class StockViewModel: ObservableObject {
     }
 
     // 加载今日财务数据有更新的股票
-    @MainActor
     func loadFinancialUpdates() async {
         isLoadingFinancialUpdates = true
         errorMessage = nil
@@ -658,12 +758,11 @@ class StockViewModel: ObservableObject {
     func toggleFavorite(_ stock: Stock) {
         if favorites.contains(stock.code) {
             favorites.remove(stock.code)
-            // 注意：这里不删除价格记录，保留用于参考
         } else {
             favorites.insert(stock.code)
-            // 记录添加时的价格
             if let price = stock.price {
                 favoriteEntryPrices[stock.code] = price
+                favoriteStockData[stock.code] = CachedStockData(name: stock.name, price: price)
             }
             if favoriteDates[stock.code] == nil {
                 favoriteDates[stock.code] = Date()
@@ -672,17 +771,20 @@ class StockViewModel: ObservableObject {
     }
 
     var favoritedStocks: [Stock] {
-        // 包含所有自选的股票，即使是已经从筛选列表中移除的
         favorites.compactMap { code in
-            // 先从当前stocks中找
-            if let stock = stocks.first(where: { $0.code == code }) {
+            // 优先从完整列表中查找，不受筛选影响
+            if let stock = allStocks.first(where: { $0.code == code }) {
                 return stock
             }
-            // 如果不在stocks中，返回一个只有基本信息的Stock对象
+            // 不在完整列表中，用缓存数据显示
+            if let cached = favoriteStockData[code] {
+                return Stock(code: code, name: cached.name, price: cached.price, change_pct: nil)
+            }
+            // 连缓存都没有（从未成功加载过），用收藏时的价格
             return Stock(
                 code: code,
                 name: "未知",
-                price: favoriteEntryPrices[code],  // 使用记录的价格
+                price: favoriteEntryPrices[code],
                 change_pct: nil
             )
         }
@@ -722,4 +824,23 @@ struct MonthFinancialData: Codable {
 struct DateCountItem: Codable {
     let date: String
     let count: Int
+}
+
+// 自选股缓存数据，用于列表里没有该股票时做降级显示
+struct CachedStockData: Codable {
+    let name: String
+    let price: Double
+}
+
+// 批量查询股票响应
+struct BatchStockResponse: Codable {
+    let code: Int
+    let data: [String: BatchStockItem]?
+}
+
+struct BatchStockItem: Codable {
+    let code: String
+    let name: String?
+    let price: Double?
+    let change_pct: Double?
 }

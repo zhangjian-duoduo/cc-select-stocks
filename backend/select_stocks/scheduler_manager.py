@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 定时任务管理器 - 自动化选股系统
-每日/每周/每月下午4点执行
+每日下午4点执行
 """
 
 import threading
@@ -14,6 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 EVENT_JOB_EXECUTED = 'job_executed'
 import pymysql
 import concurrent.futures
+import math
 
 
 # 数据库配置
@@ -28,79 +29,153 @@ DB_CONFIG = {
 def get_db():
     return pymysql.connect(**DB_CONFIG)
 
-def is_last_trading_day_of_week():
-    """判断是否是本周最后一个交易日（周五）"""
-    today = datetime.now()
-    # 周五就是一周最后一个交易日
-    return today.weekday() == 4
-
-def is_last_trading_day_of_month():
-    """判断是否是本月最后一个交易日"""
-    today = datetime.now()
-    # 获取本月最后一天
-    if today.month == 12:
-        last_day = datetime(today.year + 1, 1, 1) - timedelta(days=1)
-    else:
-        last_day = datetime(today.year, today.month + 1, 1) - timedelta(days=1)
-
-    # 如果今天接近月末且是交易日
-    return (today.day >= last_day.day - 3) and today.weekday() < 5
-
 def update_daily_kline():
-    """更新日K线数据（优化版：只更新缺失的）"""
-    print("[定时任务] 开始更新日K线数据...")
+    """更新日K线数据 - 委托给 kline_manager（含除权检测）"""
     import sys
     sys.path.insert(0, '/root/select_stocks')
-    from kline_manager import fetch_kline_data, save_kline_to_db, get_all_stock_codes, get_db
-    from datetime import datetime, timedelta
+    from kline_manager import update_today_kline
+    update_today_kline()
 
-    today = datetime.now().strftime('%Y-%m-%d')
+def aggregate_weekly_kline():
+    """从日K数据聚合生成周K线（从上周一开始查，保证上周完整）"""
+    print("[定时任务] 开始聚合周K线数据...")
+
+    today = datetime.now()
+    this_monday = today - timedelta(days=today.weekday())
+    last_monday = this_monday - timedelta(days=7)
+    start_date = last_monday.strftime('%Y-%m-%d')
+    end_date = today.strftime('%Y-%m-%d')
 
     conn = get_db()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
-        # 获取已有今天数据的股票
-        cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'daily' AND date = %s", (today,))
-        existing_today = set(row['code'] for row in cursor.fetchall())
+        cursor.execute("""
+            SELECT code, date, open, high, low, close, volume, amount
+            FROM stock_kline WHERE period='daily' AND date >= %s AND date <= %s
+            ORDER BY code, date
+        """, (start_date, end_date))
+        rows = cursor.fetchall()
 
-        # 获取所有需要更新的股票
-        cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'daily'")
-        all_stocks = [row['code'] for row in cursor.fetchall()]
-
-        # 只取缺失今天数据的股票
-        stocks = [s for s in all_stocks if s not in existing_today]
-        print(f"[定时任务] 今日已有 {len(existing_today)} 只，需要更新 {len(stocks)} 只")
-
-        if not stocks:
-            print("[定时任务] 今日数据已完整")
+        if not rows:
+            print("[定时任务] 无日K数据，跳过周K聚合")
             return
 
-        updated = [0]
-        lock = threading.Lock()
+        from collections import defaultdict
+        # 按 (code, iso_year, iso_week) 分组
+        by_week = defaultdict(list)
+        for r in rows:
+            d = datetime.strptime(str(r['date']), '%Y-%m-%d')
+            week_key = (r['code'], d.isocalendar()[0], d.isocalendar()[1])
+            by_week[week_key].append(r)
 
-        def update_one(code):
+        saved = 0
+        for (code, year, week), daily_rows in by_week.items():
             try:
-                time.sleep(0.5)  # 增加间隔，避免被API限流（10次/秒以内）
-                df = fetch_kline_data(code, 'daily')
-                if df is not None and not df.empty:
-                    latest = df.tail(1)
-                    save_kline_to_db(latest, code, 'daily')
-                with lock:
-                    updated[0] += 1
-                    if updated[0] % 100 == 0:
-                        print(f"[定时任务] 已更新 {updated[0]}/{len(stocks)}")
-                return True
+                daily_rows.sort(key=lambda x: x['date'])
+                first = daily_rows[0]
+                last = daily_rows[-1]
+
+                high = max(r['high'] for r in daily_rows if r['high'] is not None)
+                low = min(r['low'] for r in daily_rows if r['low'] is not None)
+                volume = sum(int(r['volume']) if r['volume'] is not None else 0 for r in daily_rows)
+                amount = sum(float(r['amount']) if r['amount'] is not None else 0 for r in daily_rows)
+
+                def clean_val(v):
+                    if v is None or (isinstance(v, float) and math.isnan(v)):
+                        return None
+                    return v
+
+                cursor.execute("""
+                    INSERT INTO stock_kline (code, date, open, high, low, close, volume, amount, period)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'weekly')
+                    ON DUPLICATE KEY UPDATE
+                        open = VALUES(open), high = VALUES(high), low = VALUES(low),
+                        close = VALUES(close), volume = VALUES(volume), amount = VALUES(amount),
+                        updated_at = NOW()
+                """, (
+                    code, last['date'],
+                    clean_val(first['open']), clean_val(high), clean_val(low), clean_val(last['close']),
+                    volume, clean_val(amount)
+                ))
+                saved += 1
             except Exception as e:
-                with lock:
-                    updated[0] += 1
-                return False
+                print(f"[定时任务] 周K聚合失败 {code}: {e}")
 
-        # 并行处理 - 5个线程，每线程0.5秒 = 10次/秒（刚好达到限制）
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            list(executor.map(update_one, stocks))
+        conn.commit()
+        print(f"[定时任务] 周K聚合完成，保存 {saved} 只")
+    finally:
+        cursor.close()
+        conn.close()
 
-        print(f"[定时任务] 日K线更新完成，共更新 {updated[0]} 只")
+def aggregate_monthly_kline():
+    """从日K数据聚合生成月K线（从上月1号查起，保证上月完整）"""
+    print("[定时任务] 开始聚合月K线数据...")
+
+    today = datetime.now()
+    current_month_start = today.replace(day=1)
+    prev_month_start = (current_month_start - timedelta(days=1)).replace(day=1)
+    start_date = prev_month_start.strftime('%Y-%m-%d')
+    end_date = today.strftime('%Y-%m-%d')
+
+    conn = get_db()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        cursor.execute("""
+            SELECT code, date, open, high, low, close, volume, amount
+            FROM stock_kline WHERE period='daily' AND date >= %s AND date <= %s
+            ORDER BY code, date
+        """, (start_date, end_date))
+        rows = cursor.fetchall()
+
+        if not rows:
+            print("[定时任务] 无日K数据，跳过月K聚合")
+            return
+
+        from collections import defaultdict
+        # 按 (code, year, month) 分组
+        by_month = defaultdict(list)
+        for r in rows:
+            d = datetime.strptime(str(r['date']), '%Y-%m-%d')
+            month_key = (r['code'], d.year, d.month)
+            by_month[month_key].append(r)
+
+        saved = 0
+        for (code, year, month), daily_rows in by_month.items():
+            try:
+                daily_rows.sort(key=lambda x: x['date'])
+                first = daily_rows[0]
+                last = daily_rows[-1]
+
+                high = max(r['high'] for r in daily_rows if r['high'] is not None)
+                low = min(r['low'] for r in daily_rows if r['low'] is not None)
+                volume = sum(int(r['volume']) if r['volume'] is not None else 0 for r in daily_rows)
+                amount = sum(float(r['amount']) if r['amount'] is not None else 0 for r in daily_rows)
+
+                def clean_val(v):
+                    if v is None or (isinstance(v, float) and math.isnan(v)):
+                        return None
+                    return v
+
+                cursor.execute("""
+                    INSERT INTO stock_kline (code, date, open, high, low, close, volume, amount, period)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'monthly')
+                    ON DUPLICATE KEY UPDATE
+                        open = VALUES(open), high = VALUES(high), low = VALUES(low),
+                        close = VALUES(close), volume = VALUES(volume), amount = VALUES(amount),
+                        updated_at = NOW()
+                """, (
+                    code, last['date'],
+                    clean_val(first['open']), clean_val(high), clean_val(low), clean_val(last['close']),
+                    volume, clean_val(amount)
+                ))
+                saved += 1
+            except Exception as e:
+                print(f"[定时任务] 月K聚合失败 {code}: {e}")
+
+        conn.commit()
+        print(f"[定时任务] 月K聚合完成，保存 {saved} 只")
     finally:
         cursor.close()
         conn.close()
@@ -228,76 +303,6 @@ def update_all_financial_data():
         results = list(executor.map(process_stock, stock_codes))
 
     print(f"[财务全量] 财务数据更新完成，共更新 {success[0]} 只股票")
-
-def update_weekly_kline():
-    """更新周K线数据（并行优化版）"""
-    print("[定时任务] 开始更新周K线数据...")
-    import sys
-    sys.path.insert(0, '/root/select_stocks')
-    from kline_manager import fetch_kline_data, save_kline_to_db, get_all_stock_codes, get_db
-
-    conn = get_db()
-    cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-    try:
-        cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'weekly'")
-        stocks = [row['code'] for row in cursor.fetchall()]
-        print(f"[定时任务] 共 {len(stocks)} 只股票需要更新")
-
-        updated = [0]
-        lock = threading.Lock()
-
-        def update_one(code):
-            try:
-                time.sleep(0.2)
-                df = fetch_kline_data(code, 'weekly')
-                if df is not None and not df.empty:
-                    latest = df.tail(1)
-                    save_kline_to_db(latest, code, 'weekly')
-                with lock:
-                    updated[0] += 1
-                return True
-            except Exception as e:
-                return False
-
-        # 并行处理 - 15个线程
-        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-            list(executor.map(update_one, stocks))
-
-        print(f"[定时任务] 周K线更新完成，共更新 {updated[0]} 只")
-    finally:
-        cursor.close()
-        conn.close()
-
-def update_monthly_kline():
-    """更新月K线数据"""
-    print("[定时任务] 开始更新月K线数据...")
-    import sys
-    sys.path.insert(0, '/root/select_stocks')
-    from kline_manager import fetch_kline_data, save_kline_to_db, get_all_stock_codes, get_db
-
-    conn = get_db()
-    cursor = conn.cursor(pymysql.cursors.DictCursor)
-
-    try:
-        cursor.execute("SELECT DISTINCT code FROM stock_kline WHERE period = 'monthly'")
-        stocks = [row['code'] for row in cursor.fetchall()]
-        print(f"[定时任务] 共 {len(stocks)} 只股票需要更新")
-
-        for i, code in enumerate(stocks):
-            try:
-                time.sleep(0.3)
-                df = fetch_kline_data(code, 'monthly')
-                if df is not None and not df.empty:
-                    latest = df.tail(1)
-                    save_kline_to_db(latest, code, 'monthly')
-            except Exception as e:
-                continue
-
-        print("[定时任务] 月K线更新完成")
-    finally:
-        cursor.close()
-        conn.close()
 
 def run_stock_selection():
     """运行选股算法"""
@@ -487,19 +492,8 @@ def update_analysis(update_financial=False):
             max_retries = 2
             for attempt in range(max_retries):
                 try:
-                    # 设置60秒超时
-                    import signal
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("分析超时")
-
-                    old_handler = signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(60)  # 60秒超时
-
-                    try:
-                        analysis = analyzer.analyze_stock(code)
-                    finally:
-                        signal.alarm(0)
-                        signal.signal(signal.SIGALRM, old_handler)
+                    # 直接调用分析（signal.alarm在子线程中不可用）
+                    analysis = analyzer.analyze_stock(code)
 
                     financial_data = financial_data_cache.get(code, {})
 
@@ -538,21 +532,7 @@ def update_analysis(update_financial=False):
                             cursor2.close()
                     return True
 
-                except TimeoutError as e:
-                    print(f"分析超时 {code} (尝试 {attempt + 1}/{max_retries}): {e}")
-                    if attempt == max_retries - 1:
-                        # 超时后使用默认空数据
-                        analysis = {
-                            'change_5y': 0, 'price_percentile': 50,
-                            'chip_concentration': 0.5, 'price_position': 0.5,
-                            'holders_trend': [], 'macd_divergence': {},
-                            'trend_analysis': {}
-                        }
-                        financial_data = financial_data_cache.get(code, {})
-                        continue  # 继续执行保存
-                    else:
-                        import time
-                        time.sleep(1)  # 等待1秒后重试
+
                 except Exception as e:
                     print(f"分析失败 {code}: {e}")
                     return False
@@ -764,7 +744,7 @@ def get_financial_data(code):
     return get_financial_data_fast(code)
 
 def daily_task():
-    """每日0点执行的任务"""
+    """每日下午4点执行的任务"""
     import os
 
     # 检查是否有其他daily_task在运行，避免重复执行
@@ -795,19 +775,31 @@ def daily_task():
         except Exception as e:
             print(f"[每日任务] 日K线更新失败: {e}")
 
-        # 2. 运行选股
+        # 2. 从日K聚合生成周K
+        try:
+            aggregate_weekly_kline()
+        except Exception as e:
+            print(f"[每日任务] 周K聚合失败: {e}")
+
+        # 3. 从日K聚合生成月K
+        try:
+            aggregate_monthly_kline()
+        except Exception as e:
+            print(f"[每日任务] 月K聚合失败: {e}")
+
+        # 4. 运行选股
         try:
             run_stock_selection()
         except Exception as e:
             print(f"[每日任务] 选股失败: {e}")
 
-        # 3. 更新所有A股财务数据（必须在分析之前执行）
+        # 5. 更新所有A股财务数据（必须在分析之前执行）
         try:
             update_all_financial_data()
         except Exception as e:
             print(f"[每日任务] 财务数据更新失败: {e}")
 
-        # 4. 更新分析数据
+        # 6. 更新分析数据
         try:
             update_analysis()
         except Exception as e:
@@ -939,101 +931,19 @@ def update_incremental_financial():
     except Exception as e:
         print(f"[增量财务] 出错: {e}")
 
-def weekly_task():
-    """每周最后一个交易日下午4点执行"""
-    if not is_last_trading_day_of_week():
-        print("[周任务] 今天不是本周最后一个交易日，跳过")
-        return
-
-    print("=" * 50)
-    print("[周任务] 开始执行（周五）...")
-    print("=" * 50)
-
-    # 更新周K线
-    try:
-        update_weekly_kline()
-    except Exception as e:
-        print(f"[周任务] 周K线更新失败: {e}")
-
-    # 重新选股
-    try:
-        run_stock_selection()
-    except Exception as e:
-        print(f"[周任务] 选股失败: {e}")
-
-    # 更新分析
-    try:
-        update_analysis()
-    except Exception as e:
-        print(f"[周任务] 分析更新失败: {e}")
-
-    print("=" * 50)
-    print("[周任务] 执行完成!")
-    print("=" * 50)
-
-def monthly_task():
-    """每月最后一个交易日下午4点执行"""
-    if not is_last_trading_day_of_month():
-        print("[月任务] 今天不是本月最后一个交易日，跳过")
-        return
-
-    print("=" * 50)
-    print("[月任务] 开始执行（月末）...")
-    print("=" * 50)
-
-    # 更新月K线
-    try:
-        update_monthly_kline()
-    except Exception as e:
-        print(f"[月任务] 月K线更新失败: {e}")
-
-    # 重新选股
-    try:
-        run_stock_selection()
-    except Exception as e:
-        print(f"[月任务] 选股失败: {e}")
-
-    # 更新分析
-    try:
-        update_analysis()
-    except Exception as e:
-        print(f"[月任务] 分析更新失败: {e}")
-
-    print("=" * 50)
-    print("[月任务] 执行完成!")
-    print("=" * 50)
-
-def is_last_trading_day():
-    """检查今天是否为当月最后一个交易日"""
-    import datetime
-    today = datetime.date.today()
-    # 检查明天是否是下个月
-    tomorrow = today + datetime.timedelta(days=1)
-    return tomorrow.month != today.month
-
 def start_scheduler():
     """启动定时任务调度器"""
     scheduler = BackgroundScheduler()
 
-    # 每日0点执行
+    # 每日16:00执行（更新日K → 聚合周K/月K → 选股 → 财务 → 分析）
     scheduler.add_job(daily_task, 'cron', hour=16, minute=0, id='daily_task')
 
     # # 每小时增量更新财务数据（已禁用）
     # scheduler.add_job(update_incremental_financial, 'interval', hours=1, id='incremental_financial')
 
-    # 每周五晚上7点执行（检查是否为最后交易日）
-    scheduler.add_job(weekly_task, 'cron', hour=19, minute=0, day_of_week='fri', id='weekly_task')
-
-    # 每月最后一个交易日晚上10点执行
-    scheduler.add_job(monthly_task, 'cron', hour=22, minute=0, day='28-31', id='monthly_task')
-
     scheduler.start()
-    # 启动时不再执行增量财务更新（改为每天16点更新全部）
-    # update_incremental_financial()
     print("[调度器] 定时任务已启动")
-    print("  - 每日0点: 更新日K + 选股 + 全量财务数据 + 分析")
-    print("  - 每周五19:00: 更新周K + 选股 + 分析")
-    print("  - 每月末22:00: 更新月K + 选股 + 分析")
+    print("  - 每日16:00: 更新日K → 聚合周K/月K → 选股 → 财务数据 → 分析")
 
 if __name__ == '__main__':
     # 可以手动触发任务进行测试
@@ -1041,14 +951,8 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         if sys.argv[1] == 'daily':
             daily_task()
-        elif sys.argv[1] == 'weekly':
-            weekly_task()
-        elif sys.argv[1] == 'monthly':
-            monthly_task()
         elif sys.argv[1] == 'test':
             print(f"今日是周几: {datetime.now().weekday()} (0=周一, 4=周五)")
-            print(f"是否周五: {is_last_trading_day_of_week()}")
-            print(f"是否月末: {is_last_trading_day_of_month()}")
     else:
         # 启动调度器
         start_scheduler()

@@ -10,13 +10,13 @@ struct FilterView: View {
     @State private var lowVolume = false       // 明显缩量
     @State private var yoyPositive = false    // 业绩同比转正
     @State private var qoqPositive = false    // 业绩环比转正
+    @State private var holderDecrease = false  // 股东减少
     @State private var volumeRiseStagnant = false  // 放量滞涨
     @State private var supportLevel = false   // 跌到支撑位
     @State private var resistanceLevel = false  // 涨到压力位
     @State private var highDividend = false    // 高股息
     @State private var lowPB = false          // 破净
     @State private var smallCap = false        // 小盘弹性
-    @State private var holderDecrease = false  // 股东减少
     @State private var sectorRotation = false  // 行业轮动
 
     @State private var isLoading = false
@@ -91,6 +91,15 @@ struct FilterView: View {
                     Divider().background(Color.gray.opacity(0.3))
 
                     FilterToggleRow(
+                        title: "股东减少",
+                        subtitle: "股东人数连续减少",
+                        isOn: $holderDecrease,
+                        color: "FF5722"
+                    )
+
+                    Divider().background(Color.gray.opacity(0.3))
+
+                    FilterToggleRow(
                         title: "放量滞涨",
                         subtitle: "成交量放大但价格不涨",
                         isOn: $volumeRiseStagnant,
@@ -140,15 +149,6 @@ struct FilterView: View {
                         subtitle: "市值 < 30亿",
                         isOn: $smallCap,
                         color: "00BCD4"
-                    )
-
-                    Divider().background(Color.gray.opacity(0.3))
-
-                    FilterToggleRow(
-                        title: "股东减少",
-                        subtitle: "股东人数连续减少",
-                        isOn: $holderDecrease,
-                        color: "FF5722"
                     )
 
                     Divider().background(Color.gray.opacity(0.3))
@@ -211,18 +211,18 @@ struct FilterView: View {
         if lowVolume { filters.append("low_volume") }
         if yoyPositive { filters.append("yoy_positive") }
         if qoqPositive { filters.append("qoq_positive") }
+        if holderDecrease { filters.append("holder_decrease") }
         if volumeRiseStagnant { filters.append("volume_rise_stagnant") }
         if supportLevel { filters.append("support_level") }
         if resistanceLevel { filters.append("resistance_level") }
         if highDividend { filters.append("high_dividend") }
         if lowPB { filters.append("low_pb") }
         if smallCap { filters.append("small_cap") }
-        if holderDecrease { filters.append("holder_decrease") }
         if sectorRotation { filters.append("sector_rotation") }
 
         isLoading = true
 
-        Task {
+        Task { @MainActor in
             do {
                 guard let url = URL(string: "\(baseURL)/filter") else {
                     isLoading = false
@@ -232,25 +232,47 @@ struct FilterView: View {
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.timeoutInterval = 60
+                request.timeoutInterval = 180
 
                 let body = ["filters": filters]
                 request.httpBody = try JSONEncoder().encode(body)
 
                 let (data, response) = try await URLSession.shared.data(for: request)
 
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    let result = try JSONDecoder().decode(StockResponse.self, from: data)
-                    if result.code == 0 {
-                        filteredCount = result.data?.count ?? 0
-                        stockViewModel.stocks = result.data ?? []
-                        stockViewModel.applySort()
-                        // 保存筛选条件，以便刷新后自动应用
-                        stockViewModel.activeFilters = Set(filters)
-                    }
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    print("[筛选] 无效响应")
+                    isLoading = false
+                    return
+                }
+
+                print("[筛选] HTTP状态: \(httpResponse.statusCode), 数据长度: \(data.count)")
+
+                guard httpResponse.statusCode == 200 else {
+                    print("[筛选] 服务器错误: \(httpResponse.statusCode)")
+                    isLoading = false
+                    return
+                }
+
+                // 打印响应预览
+                if let jsonStr = String(data: data, encoding: .utf8) {
+                    print("[筛选] 响应预览: \(String(jsonStr.prefix(200)))")
+                }
+
+                let result = try JSONDecoder().decode(StockResponse.self, from: data)
+                print("[筛选] code=\(result.code), data=\(result.data?.count ?? -1), total=\(result.total ?? -1)")
+
+                if result.code == 0, let filtered = result.data {
+                    filteredCount = filtered.count
+                    print("[筛选] 成功! 筛选前: \(stockViewModel.stocks.count), 筛选后: \(filtered.count)")
+                    stockViewModel.stocks = filtered
+                    stockViewModel.applySort()
+                    // 直接用 stockViewModel 保存筛选条件，不触发 didSet 的重复API调用
+                    stockViewModel.saveFiltersDirectly(Set(filters))
+                } else {
+                    print("[筛选] API错误: code=\(result.code), message=\(result.message ?? "无")")
                 }
             } catch {
-                print("筛选失败: \(error)")
+                print("[筛选] 失败: \(error)")
             }
             isLoading = false
         }

@@ -13,23 +13,31 @@ struct FinancialUpdatesView: View {
     @State private var isCalendarExpanded = false
     @State private var currentSort: FinancialSortOption = .yoy
     @State private var sortAscending: Bool = false
+    @State private var displayedDate: Date = Date()
 
     private let baseURL = "http://8.163.91.16:5000/api/v1"
+
+    private let calendar = Calendar.current
 
     private var currentYearMonth: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
-        return formatter.string(from: Date())
+        return formatter.string(from: displayedDate)
     }
 
     private var currentYear: Int {
-        let parts = currentYearMonth.split(separator: "-")
-        return parts.count >= 1 ? Int(parts[0]) ?? 2026 : 2026
+        calendar.component(.year, from: displayedDate)
     }
 
     private var currentMonth: Int {
-        let parts = currentYearMonth.split(separator: "-")
-        return parts.count >= 2 ? Int(parts[1]) ?? 4 : 4
+        calendar.component(.month, from: displayedDate)
+    }
+
+    private var canGoNext: Bool {
+        let now = Date()
+        let comps = calendar.dateComponents([.year, .month], from: now)
+        let dispComps = calendar.dateComponents([.year, .month], from: displayedDate)
+        return dispComps.year! < comps.year! || (dispComps.year! == comps.year! && dispComps.month! < comps.month!)
     }
 
     private var daysOfMonth: [Int] {
@@ -65,9 +73,26 @@ struct FinancialUpdatesView: View {
             // 日历折叠栏
             VStack(spacing: 0) {
                 HStack {
+                    Button {
+                        goToPreviousMonth()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .foregroundColor(Color(hex: "1E88E5"))
+                            .padding(.trailing, 8)
+                    }
+
                     Text(currentYearMonth)
                         .font(.subheadline)
                         .foregroundColor(.white)
+
+                    Button {
+                        goToNextMonth()
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(canGoNext ? Color(hex: "1E88E5") : .gray.opacity(0.3))
+                            .padding(.leading, 8)
+                    }
+                    .disabled(!canGoNext)
 
                     Spacer()
 
@@ -92,8 +117,8 @@ struct FinancialUpdatesView: View {
                         Text("五").font(.caption).foregroundColor(.gray)
                         Text("六").font(.caption).foregroundColor(.gray)
 
-                        ForEach(0..<firstWeekdayOffset, id: \.self) { _ in
-                            Text("").frame(height: 40)
+                        ForEach(Array(0..<firstWeekdayOffset).map { -$0 - 1 }, id: \.self) { _ in
+                            Color.clear.frame(height: 40)
                         }
 
                         ForEach(daysOfMonth, id: \.self) { day in
@@ -241,7 +266,7 @@ struct FinancialUpdatesView: View {
                         await MainActor.run {
                             datesWithData = dates
                             monthData = monthDataDict
-                            let today = String(format: "%04d-%02d-%02d", currentYear, currentMonth, Calendar.current.component(.day, from: Date()))
+                            let today = String(format: "%04d-%02d-%02d", currentYear, currentMonth, calendar.component(.day, from: displayedDate))
                             if dates.contains(today) {
                                 selectedDate = today
                             } else if let first = dates.first {
@@ -276,6 +301,23 @@ struct FinancialUpdatesView: View {
             } catch {
                 print("加载失败: \(error)")
             }
+        }
+    }
+
+    private func goToPreviousMonth() {
+        if let newDate = calendar.date(byAdding: .month, value: -1, to: displayedDate) {
+            displayedDate = newDate
+            loadMonthData(month: currentYearMonth)
+            selectedDate = ""
+        }
+    }
+
+    private func goToNextMonth() {
+        guard canGoNext else { return }
+        if let newDate = calendar.date(byAdding: .month, value: 1, to: displayedDate) {
+            displayedDate = newDate
+            loadMonthData(month: currentYearMonth)
+            selectedDate = ""
         }
     }
 

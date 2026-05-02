@@ -206,92 +206,82 @@ def apply_filters(stocks, filters, conn=None):
         conn = get_db()
         own_conn = True
 
+    # 预加载需要的K线数据（批量查询，大幅提升性能）
+    kline_cache = _preload_klines(stocks, filters, conn)
+
     result = []
 
     for stock in stocks:
         passed = True
+        code = stock.get('code')
 
         for filter_name in filters:
             if filter_name == 'momentum_reversal':
-                # 动量反转：跌幅>50% + MACD底背离 + 缩量
                 if not check_momentum_reversal(stock):
                     passed = False
                     break
 
             elif filter_name == 'ma_alignment':
-                # 均线多头排列：需要K线数据计算
-                if not check_ma_alignment(stock.get('code'), conn):
+                if not check_ma_alignment_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'volume_break':
-                # 放量突破：需要K线成交量数据
-                if not check_volume_break(stock.get('code'), conn):
+                if not check_volume_break_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'low_volume':
-                # 明显缩量：成交量低于20日平均量的50%
-                if not check_low_volume(stock.get('code'), conn):
+                if not check_low_volume_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'yoy_positive':
-                # 业绩同比转正
-                if not check_yoy_positive(stock.get('code'), conn):
+                if not check_yoy_positive(code, conn):
                     passed = False
                     break
 
             elif filter_name == 'qoq_positive':
-                # 业绩环比转正
-                if not check_qoq_positive(stock.get('code'), conn):
+                if not check_qoq_positive(code, conn):
                     passed = False
                     break
 
             elif filter_name == 'volume_rise_stagnant':
-                # 放量滞涨：成交量放大但价格不涨
-                if not check_volume_rise_stagnant(stock.get('code'), conn):
+                if not check_volume_rise_stagnant_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'support_level':
-                # 跌到支撑位：当前价格接近20日低点
-                if not check_support_level(stock.get('code'), conn):
+                if not check_support_level_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'resistance_level':
-                # 涨到压力位：当前价格接近20日高点
-                if not check_resistance_level(stock.get('code'), conn):
+                if not check_resistance_level_cached(code, kline_cache):
                     passed = False
                     break
 
             elif filter_name == 'high_dividend':
-                # 高股息：使用PE分位作为代理（低PE高股息概率大）
                 if not check_high_dividend(stock):
                     passed = False
                     break
 
             elif filter_name == 'low_pb':
-                # 破净：使用股价和代码估算（低价股可能是破净）
-                if not check_low_pb(stock.get('code'), stock.get('price')):
+                if not check_low_pb(code, stock.get('price')):
                     passed = False
                     break
 
             elif filter_name == 'small_cap':
-                # 小盘弹性：股价<10元
-                if not check_small_cap_simple(stock.get('code'), stock.get('price')):
+                if not check_small_cap_simple(code, stock.get('price')):
                     passed = False
                     break
 
             elif filter_name == 'holder_decrease':
-                # 股东人数减少
                 if not check_holder_decrease(stock):
                     passed = False
                     break
 
             elif filter_name == 'sector_rotation':
-                # 行业轮动：科创板/创业板优先
                 if not check_sector_rotation(stock):
                     passed = False
                     break
@@ -303,6 +293,129 @@ def apply_filters(stocks, filters, conn=None):
         conn.close()
 
     return result
+
+
+def _preload_klines(stocks, filters, conn):
+    """批量预加载K线数据，返回 {code: [{date, close, volume}, ...]} 按日期降序"""
+    kline_filters = {'ma_alignment', 'volume_break', 'low_volume', 'volume_rise_stagnant',
+                     'support_level', 'resistance_level'}
+    if not (set(filters) & kline_filters):
+        return {}
+
+    codes = [s['code'] for s in stocks]
+    if not codes:
+        return {}
+
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    placeholders = ','.join(['%s'] * len(codes))
+
+    # 加日期过滤避免全表扫描：60日均线最多需要最近90天数据
+    limit_per_stock = 60
+    cursor.execute(f"""
+        SELECT code, date, close, volume
+        FROM stock_kline
+        WHERE code IN ({placeholders}) AND period = 'daily'
+          AND date >= DATE_SUB(CURDATE(), INTERVAL 90 DAY)
+        ORDER BY code, date DESC
+    """, codes)
+
+    cache = {}
+    for row in cursor.fetchall():
+        code = row['code']
+        if code not in cache:
+            cache[code] = []
+        if len(cache[code]) < limit_per_stock:
+            cache[code].append({
+                'date': row['date'],
+                'close': float(row['close']) if row.get('close') else 0,
+                'volume': float(row['volume']) if row.get('volume') else 0,
+            })
+
+    cursor.close()
+    return cache
+
+
+def check_ma_alignment_cached(code, kline_cache):
+    """均线多头排列（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 60:
+        return False
+    closes = [k['close'] for k in reversed(klines)]
+    ma5 = sum(closes[-5:]) / 5
+    ma10 = sum(closes[-10:]) / 10
+    ma20 = sum(closes[-20:]) / 20
+    ma60 = sum(closes[-60:]) / 60
+    return ma5 > ma10 > ma20 > ma60
+
+
+def check_volume_break_cached(code, kline_cache):
+    """放量突破（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 21:
+        return False
+    latest_volume = klines[0]['volume']
+    max_vol_20 = max(k['volume'] for k in klines[1:21])
+    return latest_volume > max_vol_20 * 0.7
+
+
+def check_low_volume_cached(code, kline_cache):
+    """明显缩量（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 21:
+        return False
+    latest_volume = klines[0]['volume']
+    volumes = [k['volume'] for k in klines[1:21]]
+    avg_vol = sum(volumes) / len(volumes) if volumes else 0
+    if avg_vol <= 0:
+        return False
+    return latest_volume < avg_vol * 0.5
+
+
+def check_volume_rise_stagnant_cached(code, kline_cache):
+    """放量滞涨（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 21:
+        return False
+    latest_volume = klines[0]['volume']
+    latest_price = klines[0]['close']
+    volumes = [k['volume'] for k in klines[1:21]]
+    avg_vol = sum(volumes) / len(volumes) if volumes else 0
+    if avg_vol <= 0:
+        return False
+    is_volume_up = latest_volume > avg_vol * 1.5
+    old_price = klines[20]['close']
+    if old_price <= 0:
+        return False
+    price_change = (latest_price - old_price) / old_price * 100
+    return is_volume_up and price_change < 5
+
+
+def check_support_level_cached(code, kline_cache):
+    """跌到支撑位（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 20:
+        return False
+    latest_price = klines[0]['close']
+    if latest_price <= 0:
+        return False
+    low_20 = min(k['close'] for k in klines[:20] if k['close'] > 0)
+    if low_20 <= 0:
+        return False
+    return (latest_price - low_20) / low_20 < 0.03
+
+
+def check_resistance_level_cached(code, kline_cache):
+    """涨到压力位（使用预加载缓存）"""
+    klines = kline_cache.get(code, [])
+    if len(klines) < 20:
+        return False
+    latest_price = klines[0]['close']
+    if latest_price <= 0:
+        return False
+    high_20 = max(k['close'] for k in klines[:20] if k['close'] > 0)
+    if high_20 <= 0:
+        return False
+    return (high_20 - latest_price) / high_20 < 0.03
 
 def check_momentum_reversal(stock):
     """检查动量反转：跌幅>50% + MACD底背离"""
@@ -1357,6 +1470,191 @@ def refresh_analysis():
             cursor.close()
         if conn:
             conn.close()
+
+@app.route('/api/v1/stocks/batch', methods=['POST'])
+def get_stocks_batch():
+    """根据代码列表批量获取股票数据（用于自选股等场景）
+    请求体: {"codes": ["000001", "300531", ...]}
+    返回完整的股票卡片数据，包括分析数据
+    """
+    data = request.get_json() or {}
+    codes = data.get('codes', [])
+
+    if not codes:
+        return jsonify({'code': 1, 'message': '缺少codes参数'})
+
+    conn = None
+    cursor = None
+    try:
+        import json
+        from decimal import Decimal
+
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        placeholders = ','.join(['%s'] * len(codes))
+        cursor.execute(f"""
+            SELECT t.code, t.close as kline_close, t.date as kline_date,
+                   n.name,
+                   s.price, s.change_pct, s.sector,
+                   a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
+                   a.macd_divergence, a.trend_analysis, a.price_position, a.roe,
+                   f.net_profit_yoy, f.net_profit_qoq
+            FROM (
+                SELECT k.code, k.close, k.date
+                FROM stock_kline k
+                INNER JOIN (
+                    SELECT code, MAX(date) as max_date
+                    FROM stock_kline
+                    WHERE code IN ({placeholders}) AND period = 'daily'
+                    GROUP BY code
+                ) m ON k.code = m.code AND k.date = m.max_date AND k.period = 'daily'
+            ) t
+            LEFT JOIN stock_names n ON CONVERT(t.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
+            LEFT JOIN stocks s ON CONVERT(t.code USING utf8mb4) = CONVERT(s.code USING utf8mb4)
+            LEFT JOIN stock_analysis a ON CONVERT(t.code USING utf8mb4) = CONVERT(a.code USING utf8mb4)
+            LEFT JOIN (
+                SELECT code, net_profit_yoy, net_profit_qoq
+                FROM stock_financial_history
+                WHERE (code, report_date) IN (
+                    SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
+                )
+            ) f ON CONVERT(t.code USING utf8mb4) = CONVERT(f.code USING utf8mb4)
+        """, codes)
+
+        rows = cursor.fetchall()
+        result = {}
+
+        for row in rows:
+            code = row['code']
+            price = float(row['kline_close']) if row.get('kline_close') else (float(row['price']) if row.get('price') else 0)
+
+            change_pct = None
+            if row.get('change_pct') is not None:
+                try:
+                    change_pct = float(row['change_pct'])
+                except:
+                    pass
+
+            # 解析JSON字段
+            for json_field in ['holders_trend', 'macd_divergence', 'trend_analysis']:
+                if row.get(json_field):
+                    try:
+                        if isinstance(row[json_field], str):
+                            row[json_field] = json.loads(row[json_field])
+                    except:
+                        row[json_field] = None
+                else:
+                    row[json_field] = None
+
+            item = {
+                'code': code,
+                'name': row.get('name') or code,
+                'price': price,
+                'change_pct': change_pct,
+                'sector': row.get('sector'),
+                'holders_trend': row.get('holders_trend'),
+                'change_5y': float(row['change_5y']) if row.get('change_5y') is not None else None,
+                'price_percentile': float(row['price_percentile']) if row.get('price_percentile') is not None else None,
+                'chip_concentration': float(row['chip_concentration']) if row.get('chip_concentration') is not None else None,
+                'macd_divergence': row.get('macd_divergence'),
+                'trend_analysis': row.get('trend_analysis'),
+                'price_position': float(row['price_position']) if row.get('price_position') is not None else None,
+                'roe': row.get('roe'),
+                'net_profit_yoy': row.get('net_profit_yoy'),
+                'net_profit_qoq': row.get('net_profit_qoq'),
+            }
+            result[code] = item
+
+        # 对没查到K线的股票，尝试从stocks+analysis表获取
+        missing = [c for c in codes if c not in result]
+        if missing:
+            m_placeholders = ','.join(['%s'] * len(missing))
+            cursor.execute(f"""
+                SELECT s.code, s.name, s.price, s.change_pct, s.sector,
+                       a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
+                       a.macd_divergence, a.trend_analysis, a.price_position, a.roe,
+                       f.net_profit_yoy, f.net_profit_qoq
+                FROM stocks s
+                LEFT JOIN stock_analysis a ON s.code = a.code
+                LEFT JOIN (
+                    SELECT code, net_profit_yoy, net_profit_qoq
+                    FROM stock_financial_history
+                    WHERE (code, report_date) IN (
+                        SELECT code, MAX(report_date) FROM stock_financial_history GROUP BY code
+                    )
+                ) f ON s.code = f.code
+                WHERE s.code IN ({m_placeholders})
+            """, missing)
+            for s in cursor.fetchall():
+                code = s['code']
+                for json_field in ['holders_trend', 'macd_divergence', 'trend_analysis']:
+                    if s.get(json_field):
+                        try:
+                            if isinstance(s[json_field], str):
+                                s[json_field] = json.loads(s[json_field])
+                        except:
+                            s[json_field] = None
+                result[code] = {
+                    'code': code,
+                    'name': s.get('name') or code,
+                    'price': float(s['price']) if s.get('price') else 0,
+                    'change_pct': float(s['change_pct']) if s.get('change_pct') else None,
+                    'sector': s.get('sector'),
+                    'holders_trend': s.get('holders_trend'),
+                    'change_5y': float(s['change_5y']) if s.get('change_5y') is not None else None,
+                    'price_percentile': float(s['price_percentile']) if s.get('price_percentile') is not None else None,
+                    'chip_concentration': float(s['chip_concentration']) if s.get('chip_concentration') is not None else None,
+                    'macd_divergence': s.get('macd_divergence'),
+                    'trend_analysis': s.get('trend_analysis'),
+                    'price_position': float(s['price_position']) if s.get('price_position') is not None else None,
+                    'roe': s.get('roe'),
+                    'net_profit_yoy': s.get('net_profit_yoy'),
+                    'net_profit_qoq': s.get('net_profit_qoq'),
+                }
+
+            # 还有缺失的，查stock_names（连stocks表都没有）
+            still_missing = [c for c in missing if c not in result]
+            if still_missing:
+                sm_placeholders = ','.join(['%s'] * len(still_missing))
+                cursor.execute(
+                    f"SELECT code, name FROM stock_names WHERE CONVERT(code USING utf8mb4) IN ({sm_placeholders})",
+                    still_missing
+                )
+                for n in cursor.fetchall():
+                    code = n['code']
+                    result[code] = {
+                        'code': code, 'name': n.get('name') or code,
+                        'price': 0, 'change_pct': None,
+                        'sector': None, 'holders_trend': None,
+                        'change_5y': None, 'price_percentile': None,
+                        'chip_concentration': None, 'macd_divergence': None,
+                        'trend_analysis': None, 'price_position': None,
+                        'roe': None, 'net_profit_yoy': None, 'net_profit_qoq': None,
+                    }
+
+                for code in still_missing:
+                    if code not in result:
+                        result[code] = {
+                            'code': code, 'name': code,
+                            'price': 0, 'change_pct': None,
+                            'sector': None, 'holders_trend': None,
+                            'change_5y': None, 'price_percentile': None,
+                            'chip_concentration': None, 'macd_divergence': None,
+                            'trend_analysis': None, 'price_position': None,
+                            'roe': None, 'net_profit_yoy': None, 'net_profit_qoq': None,
+                        }
+
+        return jsonify({'code': 0, 'data': result})
+
+    except Exception as e:
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 
 @app.route('/health', methods=['GET'])
 def health():
