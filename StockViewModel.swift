@@ -95,6 +95,8 @@ class StockViewModel: ObservableObject {
     private let favoriteDatesKey = "favorite_dates"
     private let favoriteEntryPricesKey = "favorite_entry_prices"
     private let favoriteStockDataKey = "favorite_stock_data"
+    private let cachedStocksKey = "cached_all_stocks"
+    private let cachedStocksDateKey = "cached_stocks_date"
 
     init() {
         loadFavorites()
@@ -154,42 +156,23 @@ class StockViewModel: ObservableObject {
         }
         guard !missingCodes.isEmpty else { return }
 
-        guard let url = URL(string: "\(baseURL)/stocks/batch") else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 15
-
         do {
-            let body = ["codes": Array(missingCodes)]
-            request.httpBody = try JSONEncoder().encode(body)
+            let result: BatchStockResponse = try await APIClient.post("/stocks/batch", body: ["codes": Array(missingCodes)], retries: 2, timeout: 15)
 
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse,
-                  httpResponse.statusCode == 200 else { return }
+            guard result.code == 0, let batchData = result.data else { return }
 
-            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let respCode = json["code"] as? Int, respCode == 0,
-                  let batchData = json["data"] as? [String: Any] else { return }
-
-            for (code, itemValue) in batchData {
-                guard var itemDict = itemValue as? [String: Any] else { continue }
-                // 确保code字段存在
-                if itemDict["code"] == nil {
-                    itemDict["code"] = code
+            for (code, stock) in batchData {
+                let finalStock: Stock
+                if stock.code.isEmpty || stock.name.isEmpty {
+                    finalStock = Stock(code: code, name: stock.name.isEmpty ? code : stock.name, price: stock.price, change_pct: stock.change_pct)
+                } else {
+                    finalStock = stock
                 }
-                // 将字典转为JSON data，再通过Stock的Codable解码
-                let itemData = try JSONSerialization.data(withJSONObject: itemDict)
-                if let stock = try? JSONDecoder().decode(Stock.self, from: itemData) {
-                    allStocks.append(stock)
-                }
-                // 同时更新缓存
-                let name = itemDict["name"] as? String ?? code
-                let price = itemDict["price"] as? Double ?? favoriteEntryPrices[code] ?? 0
+                allStocks.append(finalStock)
+                let name = finalStock.name.isEmpty ? code : finalStock.name
+                let price = finalStock.price ?? favoriteEntryPrices[code] ?? 0
                 favoriteStockData[code] = CachedStockData(name: name, price: price)
             }
-            // 重新刷新自选股缓存，让 allStocks 中新增的股票被同步
             refreshFavoriteStockData()
         } catch {
             print("补全自选股数据失败: \(error)")
@@ -412,86 +395,60 @@ class StockViewModel: ObservableObject {
 
     // 更新实时价格
     func updatePrices() async {
-        guard let url = URL(string: "\(baseURL)/update_prices") else { return }
+        let _: EmptyResponse? = try? await APIClient.post("/update_prices", body: [:], retries: 1, timeout: 15)
+    }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                print("价格更新成功")
-            }
-        } catch {
-            print("价格更新失败: \(error)")
+    private func saveCachedStocks() {
+        guard !allStocks.isEmpty else { return }
+        if let data = try? JSONEncoder().encode(allStocks) {
+            UserDefaults.standard.set(data, forKey: cachedStocksKey)
+            UserDefaults.standard.set(Date(), forKey: cachedStocksDateKey)
         }
+    }
+
+    private func loadCachedStocks() -> [Stock]? {
+        guard let data = UserDefaults.standard.data(forKey: cachedStocksKey),
+              let stocks = try? JSONDecoder().decode([Stock].self, from: data),
+              !stocks.isEmpty else { return nil }
+        return stocks
     }
 
     func loadData() async {
         isLoading = true
         errorMessage = nil
 
-        guard let url = URL(string: "\(baseURL)/stocks?page_size=500") else {
-            errorMessage = "URL错误"
-            isLoading = false
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 60
-
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            // 调试：打印响应长度
-            print("收到数据: \(data.count) bytes")
-
-            // 打印前500个字符的JSON用于调试
-            if let jsonString = String(data: data, encoding: .utf8) {
-                print("JSON预览: \(String(jsonString.prefix(500)))")
-            }
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                errorMessage = "无效响应"
-                isLoading = false
-                return
-            }
-
-            guard httpResponse.statusCode == 200 else {
-                errorMessage = "服务器错误: \(httpResponse.statusCode)"
-                isLoading = false
-                return
-            }
-
-            let stockResponse = try JSONDecoder().decode(StockResponse.self, from: data)
+            let stockResponse: StockResponse = try await APIClient.get("/stocks", queryItems: [URLQueryItem(name: "page_size", value: "500")], retries: 2)
             if stockResponse.code == 0 {
                 self.allStocks = stockResponse.data ?? []
                 self.stocks = self.allStocks
                 self.refreshFavoriteStockData()
                 self.applySort()
                 self.errorMessage = nil
-                // 补全不在选股列表中的自选股数据
+                self.saveCachedStocks()
                 await self.fetchMissingFavorites()
             } else {
                 self.errorMessage = "API错误: \(stockResponse.message ?? "未知错误")"
             }
-        } catch let error as DecodingError {
-            // 详细解析错误
-            switch error {
-            case .keyNotFound(let key, _):
-                self.errorMessage = "缺少字段: \(key.stringValue)"
-            case .typeMismatch(let type, let context):
-                let debugDescription = context.debugDescription
-                self.errorMessage = "类型不匹配: \(type) - \(debugDescription)"
-            case .valueNotFound(let type, _):
-                self.errorMessage = "值为空: \(type)"
-            default:
-                self.errorMessage = "数据解析错误: \(error.localizedDescription)"
+        } catch let error as APIClient.APIError {
+            // 网络不可用时使用缓存
+            if case .networkError = error, let cached = loadCachedStocks() {
+                self.allStocks = cached
+                self.stocks = cached
+                self.applySort()
+                self.errorMessage = "无法连接服务器，显示缓存数据"
+            } else {
+                self.errorMessage = error.errorDescription
             }
-            // 打印原始错误用于调试
-            print("JSON解析错误: \(error)")
         } catch {
-            self.errorMessage = "网络错误: \(error.localizedDescription)"
+            if let cached = loadCachedStocks() {
+                self.allStocks = cached
+                self.stocks = cached
+                self.applySort()
+                self.errorMessage = "无法连接服务器，显示缓存数据"
+            } else {
+                self.errorMessage = "未知错误: \(error.localizedDescription)"
+            }
         }
 
         isLoading = false
@@ -504,32 +461,17 @@ class StockViewModel: ObservableObject {
             applySort()
             return
         }
-        print("applyServerFilters: \(filters)")
-
-        guard let url = URL(string: "\(baseURL)/filter") else { return }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180
 
         do {
-            let body = ["filters": Array(filters)]
-            request.httpBody = try JSONEncoder().encode(body)
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                let result = try JSONDecoder().decode(StockResponse.self, from: data)
-                if result.code == 0 {
-                    print("筛选成功: \(result.data?.count ?? 0) 只")
-                    self.stocks = result.data ?? []
-                    self.applySort()
-                } else {
-                    print("筛选失败: \(result.message ?? "未知错误")")
-                }
+            let result: StockResponse = try await APIClient.post("/filter", body: ["filters": Array(filters)])
+            if result.code == 0 {
+                self.stocks = result.data ?? []
+                self.applySort()
             }
+        } catch let error as APIClient.APIError {
+            print("筛选失败: \(error.errorDescription ?? "")")
         } catch {
-            print("应用筛选失败: \(error)")
+            print("筛选失败: \(error)")
         }
     }
 
@@ -548,38 +490,14 @@ class StockViewModel: ObservableObject {
     // 加载今日财务数据有更新的股票
     func loadFinancialUpdates() async {
         isLoadingFinancialUpdates = true
-        errorMessage = nil
-
-        guard let url = URL(string: "\(baseURL)/financial_updates") else {
-            errorMessage = "URL错误"
-            isLoadingFinancialUpdates = false
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 60
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                errorMessage = "无效响应"
-                isLoadingFinancialUpdates = false
-                return
-            }
-
-            guard httpResponse.statusCode == 200 else {
-                errorMessage = "服务器错误: \(httpResponse.statusCode)"
-                isLoadingFinancialUpdates = false
-                return
-            }
-
-            let decoder = JSONDecoder()
-            let result = try decoder.decode(FinancialUpdatesResponse.self, from: data)
+            let result: FinancialUpdatesResponse = try await APIClient.get("/financial_updates", retries: 2)
             if result.code == 0, let data = result.data {
                 self.financialUpdateStocks = data.stocks ?? []
-                print("今日有 \(self.financialUpdateStocks.count) 只股票财务数据更新")
             }
+        } catch let error as APIClient.APIError {
+            print("财务更新加载失败: \(error.errorDescription ?? "")")
         } catch {
             print("财务更新加载失败: \(error)")
         }
@@ -845,15 +763,3 @@ struct CachedStockData: Codable {
     let price: Double
 }
 
-// 批量查询股票响应
-struct BatchStockResponse: Codable {
-    let code: Int
-    let data: [String: BatchStockItem]?
-}
-
-struct BatchStockItem: Codable {
-    let code: String
-    let name: String?
-    let price: Double?
-    let change_pct: Double?
-}

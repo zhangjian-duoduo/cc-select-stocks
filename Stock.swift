@@ -133,6 +133,17 @@ struct StockResponse: Codable {
     let total: Int?
 }
 
+struct EmptyResponse: Codable {
+    let code: Int?
+    let message: String?
+}
+
+struct BatchStockResponse: Codable {
+    let code: Int
+    let data: [String: Stock]?
+    let message: String?
+}
+
 // 虚拟交易记录
 struct Trade: Codable, Identifiable {
     var id: String { code + "_" + String(timeIntervalSince1970) }

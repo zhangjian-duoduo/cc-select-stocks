@@ -9,7 +9,6 @@ struct FinancialUpdatesView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
     @State private var selectedDate: String = ""
     @State private var monthData: [String: Int] = [:]
-    @State private var datesWithData: [String] = []
     @State private var isCalendarExpanded = false
     @State private var currentSort: FinancialSortOption = .yoy
     @State private var sortAscending: Bool = false
@@ -17,22 +16,12 @@ struct FinancialUpdatesView: View {
     @State private var selectedStockIndex: Int = 0
     @State private var showDetailPage = false
 
-    private let baseURL = AppConfig.baseURL
-
     private let calendar = Calendar.current
 
     private var currentYearMonth: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
         return formatter.string(from: displayedDate)
-    }
-
-    private var currentYear: Int {
-        calendar.component(.year, from: displayedDate)
-    }
-
-    private var currentMonth: Int {
-        calendar.component(.month, from: displayedDate)
     }
 
     private var canGoNext: Bool {
@@ -44,128 +33,19 @@ struct FinancialUpdatesView: View {
         return dispYear < nowYear || (dispYear == nowYear && dispMonth < nowMonth)
     }
 
-    private var daysOfMonth: [Int] {
-        let calendar = Calendar.current
-        var components = DateComponents()
-        components.year = currentYear
-        components.month = currentMonth
-        components.day = 1
-        if let date = calendar.date(from: components),
-           let range = calendar.range(of: .day, in: .month, for: date) {
-            return Array(range)
-        }
-        return []
-    }
-
-    private var firstWeekdayOffset: Int {
-        let calendar = Calendar.current
-        var components = DateComponents()
-        components.year = currentYear
-        components.month = currentMonth
-        components.day = 1
-        let firstDayOfMonth = calendar.date(from: components) ?? Date()
-        let weekday = calendar.component(.weekday, from: firstDayOfMonth)
-        return weekday - 1
-    }
-
-    private func makeDateString(_ day: Int) -> String {
-        return String(format: "%04d-%02d-%02d", currentYear, currentMonth, day)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // 日历折叠栏
-            VStack(spacing: 0) {
-                HStack {
-                    Button {
-                        goToPreviousMonth()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(Color(hex: "1E88E5"))
-                            .padding(.trailing, 8)
-                    }
-
-                    Text(currentYearMonth)
-                        .font(.subheadline)
-                        .foregroundColor(.white)
-
-                    Button {
-                        goToNextMonth()
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(canGoNext ? Color(hex: "1E88E5") : .gray.opacity(0.3))
-                            .padding(.leading, 8)
-                    }
-                    .disabled(!canGoNext)
-
-                    Spacer()
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isCalendarExpanded.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isCalendarExpanded ? "chevron.up" : "chevron.down")
-                            .foregroundColor(.gray)
-                    }
-                }
-                .padding()
-
-                if isCalendarExpanded {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
-                        Text("日").font(.caption).foregroundColor(.gray)
-                        Text("一").font(.caption).foregroundColor(.gray)
-                        Text("二").font(.caption).foregroundColor(.gray)
-                        Text("三").font(.caption).foregroundColor(.gray)
-                        Text("四").font(.caption).foregroundColor(.gray)
-                        Text("五").font(.caption).foregroundColor(.gray)
-                        Text("六").font(.caption).foregroundColor(.gray)
-
-                        ForEach(Array(0..<firstWeekdayOffset).map { -$0 - 1 }, id: \.self) { _ in
-                            Color.clear.frame(height: 40)
-                        }
-
-                        ForEach(daysOfMonth, id: \.self) { day in
-                            let dateStr = makeDateString(day)
-                            let hasData = datesWithData.contains(dateStr)
-                            let count = monthData[dateStr] ?? 0
-
-                            Button {
-                                if hasData {
-                                    selectedDate = dateStr
-                                    loadUpdatesForDate(date: dateStr)
-                                }
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Text("\(day)")
-                                        .font(.system(size: 14, weight: selectedDate == dateStr ? .bold : .regular))
-                                    if hasData && count > 0 {
-                                        Text("\(count)")
-                                            .font(.system(size: 9))
-                                            .foregroundColor(Color(hex: "FFC107"))
-                                    } else {
-                                        Text("-")
-                                            .font(.system(size: 9))
-                                            .foregroundColor(.gray.opacity(0.3))
-                                    }
-                                }
-                                .frame(height: 40)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .fill(hasData
-                                            ? (selectedDate == dateStr ? Color(hex: "FFC107") : Color(hex: "1E1E1E"))
-                                            : Color(hex: "1E1E1E").opacity(0.3))
-                                )
-                                .foregroundColor(hasData ? (selectedDate == dateStr ? .black : .white) : .gray.opacity(0.3))
-                            }
-                            .disabled(!hasData)
-                        }
-                    }
-                    .padding()
-                }
-            }
-            .background(Color(hex: "1E1E1E"))
+            CalendarMonthPicker(
+                displayedDate: $displayedDate,
+                selectedDate: $selectedDate,
+                isExpanded: $isCalendarExpanded,
+                dateData: monthData,
+                accentColor: Color(hex: "FFC107"),
+                canGoNext: canGoNext,
+                onMonthChanged: { loadMonthData(month: $0) },
+                onDateSelected: { loadUpdatesForDate(date: $0) }
+            )
 
             // 排序按钮栏
             HStack(spacing: 12) {
@@ -267,28 +147,22 @@ struct FinancialUpdatesView: View {
     private func loadMonthData(month: String) {
         Task {
             do {
-                guard let url = URL(string: "\(baseURL)/financial_updates/month/\(month)") else { return }
-                let (data, response) = try await URLSession.shared.data(from: url)
-
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    let result = try JSONDecoder().decode(MonthFinancialResponse.self, from: data)
-                    if result.code == 0, let data = result.data {
-                        var dates: [String] = []
-                        var monthDataDict: [String: Int] = [:]
-                        for item in data.dates {
-                            dates.append(item.date)
-                            monthDataDict[item.date] = item.count
-                        }
-                        await MainActor.run {
-                            datesWithData = dates
-                            monthData = monthDataDict
-                            let now = Date()
-                            let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
-                            if dates.contains(today) {
-                                selectedDate = today
-                            } else if let first = dates.first {
-                                selectedDate = first
-                            }
+                let result: MonthFinancialResponse = try await APIClient.get("/financial_updates/month/\(month)")
+                if result.code == 0, let data = result.data {
+                    var monthDataDict: [String: Int] = [:]
+                    var dateList: [String] = []
+                    for item in data.dates {
+                        dateList.append(item.date)
+                        monthDataDict[item.date] = item.count
+                    }
+                    await MainActor.run {
+                        monthData = monthDataDict
+                        let now = Date()
+                        let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
+                        if dateList.contains(today) {
+                            selectedDate = today
+                        } else if let first = dateList.first {
+                            selectedDate = first
                         }
                     }
                 }
@@ -304,15 +178,10 @@ struct FinancialUpdatesView: View {
 
         Task {
             do {
-                guard let url = URL(string: "\(baseURL)/financial_updates/date/\(date)?sort_by=\(sortBy)&order=\(order)") else { return }
-                let (data, response) = try await URLSession.shared.data(from: url)
-
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    let result = try JSONDecoder().decode(FinancialUpdatesResponse.self, from: data)
-                    if result.code == 0, let resultData = result.data {
-                        await MainActor.run {
-                            stockViewModel.financialUpdateStocks = resultData.stocks ?? []
-                        }
+                let result: FinancialUpdatesResponse = try await APIClient.get("/financial_updates/date/\(date)", queryItems: [URLQueryItem(name: "sort_by", value: sortBy), URLQueryItem(name: "order", value: order)])
+                if result.code == 0, let resultData = result.data {
+                    await MainActor.run {
+                        stockViewModel.financialUpdateStocks = resultData.stocks ?? []
                     }
                 }
             } catch {
@@ -321,37 +190,17 @@ struct FinancialUpdatesView: View {
         }
     }
 
-    private func goToPreviousMonth() {
-        if let newDate = calendar.date(byAdding: .month, value: -1, to: displayedDate) {
-            displayedDate = newDate
-            loadMonthData(month: currentYearMonth)
-            selectedDate = ""
-        }
-    }
-
-    private func goToNextMonth() {
-        guard canGoNext else { return }
-        if let newDate = calendar.date(byAdding: .month, value: 1, to: displayedDate) {
-            displayedDate = newDate
-            loadMonthData(month: currentYearMonth)
-            selectedDate = ""
-        }
-    }
-
     private func reloadWithSort() {
+        let sortBy = currentSort == .yoy ? "net_profit_yoy" : "net_profit_qoq"
+        let order = sortAscending ? "asc" : "desc"
+
         if selectedDate.isEmpty {
-            let sortBy = currentSort == .yoy ? "net_profit_yoy" : "net_profit_qoq"
-            let order = sortAscending ? "asc" : "desc"
             Task {
                 do {
-                    guard let url = URL(string: "\(baseURL)/financial_updates?sort_by=\(sortBy)&order=\(order)") else { return }
-                    let (data, response) = try await URLSession.shared.data(from: url)
-                    if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                        let result = try JSONDecoder().decode(FinancialUpdatesResponse.self, from: data)
-                        if result.code == 0, let resultData = result.data {
-                            await MainActor.run {
-                                stockViewModel.financialUpdateStocks = resultData.stocks ?? []
-                            }
+                    let result: FinancialUpdatesResponse = try await APIClient.get("/financial_updates", queryItems: [URLQueryItem(name: "sort_by", value: sortBy), URLQueryItem(name: "order", value: order)])
+                    if result.code == 0, let resultData = result.data {
+                        await MainActor.run {
+                            stockViewModel.financialUpdateStocks = resultData.stocks ?? []
                         }
                     }
                 } catch {

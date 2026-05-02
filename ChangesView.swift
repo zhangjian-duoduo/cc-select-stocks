@@ -56,22 +56,12 @@ struct ChangesView: View {
     @State private var isCalendarExpanded = false
     @State private var displayedDate: Date = Date()
 
-    private let baseURL = AppConfig.baseURL
-
     private let calendar = Calendar.current
 
     private var currentYearMonth: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM"
         return formatter.string(from: displayedDate)
-    }
-
-    private var currentYear: Int {
-        calendar.component(.year, from: displayedDate)
-    }
-
-    private var currentMonth: Int {
-        calendar.component(.month, from: displayedDate)
     }
 
     private var canGoNext: Bool {
@@ -83,203 +73,23 @@ struct ChangesView: View {
         return dispYear < nowYear || (dispYear == nowYear && dispMonth < nowMonth)
     }
 
-    private var daysOfMonth: [Int] {
-        let calendar = Calendar.current
-        var components = DateComponents()
-        components.year = currentYear
-        components.month = currentMonth
-        components.day = 1
-        if let date = calendar.date(from: components),
-           let range = calendar.range(of: .day, in: .month, for: date) {
-            return Array(range)
-        }
-        return []
-    }
-
-    private func makeDateString(_ day: Int) -> String {
-        return String(format: "%04d-%02d-%02d", currentYear, currentMonth, day)
-    }
-
-    private var firstWeekdayOffset: Int {
-        let calendar = Calendar.current
-        var components = DateComponents()
-        components.year = currentYear
-        components.month = currentMonth
-        components.day = 1
-        let firstDayOfMonth = calendar.date(from: components) ?? Date()
-        let weekday = calendar.component(.weekday, from: firstDayOfMonth)
-        return weekday - 1
-    }
-
-    private func loadMonthData(month: String) {
-        Task { @MainActor in
-            isLoading = true
-            errorMessage = nil
-
-            do {
-                guard let url = URL(string: "\(baseURL)/changes/month/\(month)") else {
-                    errorMessage = "URL错误"
-                    isLoading = false
-                    return
-                }
-
-                let (data, response) = try await URLSession.shared.data(from: url)
-
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 else {
-                    errorMessage = "服务器错误"
-                    isLoading = false
-                    return
-                }
-
-                let result = try JSONDecoder().decode(MonthResponse.self, from: data)
-                if result.code == 0, let data = result.data {
-                    monthData = data
-                    if let lastDate = data.dates.last {
-                        selectedDate = lastDate
-                        loadChanges(date: lastDate)
-                    }
-                } else {
-                    errorMessage = result.message ?? "未知错误"
-                }
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isLoading = false
-        }
-    }
-
-    private func loadChanges(date: String) {
-        Task { @MainActor in
-            isLoading = true
-
-            do {
-                guard let url = URL(string: "\(baseURL)/changes/\(date)") else {
-                    isLoading = false
-                    return
-                }
-
-                let (data, response) = try await URLSession.shared.data(from: url)
-
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    let result = try JSONDecoder().decode(ChangesResponse.self, from: data)
-                    if result.code == 0, let resultData = result.data {
-                        changesData = resultData
-                    } else {
-                        print("API error: \(result.message ?? "unknown")")
-                    }
-                }
-            } catch {
-                print("加载变化失败: \(error)")
-            }
-            isLoading = false
-        }
+    private var dateData: [String: Int] {
+        guard let removed = monthData?.removed else { return [:] }
+        return removed.mapValues { $0.count }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            // 月份选择器和日历开关
-            VStack(spacing: 0) {
-                HStack {
-                    Button {
-                        goToPreviousMonth()
-                    } label: {
-                        Image(systemName: "chevron.left")
-                            .foregroundColor(Color(hex: "1E88E5"))
-                            .padding(.trailing, 8)
-                    }
-
-                    Button {
-                        loadMonthData(month: currentYearMonth)
-                    } label: {
-                        Text(currentYearMonth)
-                            .font(.subheadline)
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "1E88E5"))
-                            .foregroundColor(.white)
-                            .cornerRadius(8)
-                    }
-
-                    Button {
-                        goToNextMonth()
-                    } label: {
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(canGoNext ? Color(hex: "1E88E5") : .gray.opacity(0.3))
-                            .padding(.leading, 8)
-                    }
-                    .disabled(!canGoNext)
-
-                    Spacer()
-
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            isCalendarExpanded.toggle()
-                        }
-                    } label: {
-                        Image(systemName: isCalendarExpanded ? "chevron.up" : "chevron.down")
-                            .foregroundColor(.gray)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                    }
-                }
-                .padding()
-
-                if isCalendarExpanded {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 7), spacing: 8) {
-                        Text("日").font(.caption).foregroundColor(.gray)
-                        Text("一").font(.caption).foregroundColor(.gray)
-                        Text("二").font(.caption).foregroundColor(.gray)
-                        Text("三").font(.caption).foregroundColor(.gray)
-                        Text("四").font(.caption).foregroundColor(.gray)
-                        Text("五").font(.caption).foregroundColor(.gray)
-                        Text("六").font(.caption).foregroundColor(.gray)
-
-                        ForEach(Array(0..<firstWeekdayOffset).map { -$0 - 1 }, id: \.self) { _ in
-                            Color.clear.frame(height: 40)
-                        }
-
-                        ForEach(daysOfMonth, id: \.self) { day in
-                            let dateStr = makeDateString(day)
-                            let hasData = monthData?.dates.contains(dateStr) ?? false
-                            let removedCount = monthData?.removed[dateStr]?.count ?? 0
-
-                            Button {
-                                if hasData {
-                                    selectedDate = dateStr
-                                    loadChanges(date: dateStr)
-                                }
-                            } label: {
-                                VStack(spacing: 4) {
-                                    Text("\(day)")
-                                        .font(.system(size: 16, weight: selectedDate == dateStr ? .bold : .regular))
-                                    if hasData && removedCount > 0 {
-                                        Text("\(removedCount)")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(Color(hex: "F44336"))
-                                    } else {
-                                        Text("-")
-                                            .font(.system(size: 10))
-                                            .foregroundColor(.gray.opacity(0.3))
-                                    }
-                                }
-                                .frame(height: 50)
-                                .frame(maxWidth: .infinity)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(hasData
-                                            ? (selectedDate == dateStr ? Color(hex: "F44336") : Color(hex: "1E1E1E"))
-                                            : Color(hex: "1E1E1E").opacity(0.3))
-                                )
-                                .foregroundColor(hasData ? (selectedDate == dateStr ? .white : .gray) : .gray.opacity(0.3))
-                            }
-                            .disabled(!hasData)
-                        }
-                    }
-                    .padding()
-                }
-            }
-            .background(Color(hex: "1E1E1E"))
+            CalendarMonthPicker(
+                displayedDate: $displayedDate,
+                selectedDate: $selectedDate,
+                isExpanded: $isCalendarExpanded,
+                dateData: dateData,
+                accentColor: Color(hex: "F44336"),
+                canGoNext: canGoNext,
+                onMonthChanged: { loadMonthData(month: $0) },
+                onDateSelected: { loadChanges(date: $0) }
+            )
 
             if let data = changesData {
                 HStack(spacing: 16) {
@@ -360,18 +170,44 @@ struct ChangesView: View {
         }
     }
 
-    private func goToPreviousMonth() {
-        if let newDate = calendar.date(byAdding: .month, value: -1, to: displayedDate) {
-            displayedDate = newDate
-            loadMonthData(month: currentYearMonth)
+    private func loadMonthData(month: String) {
+        Task { @MainActor in
+            isLoading = true
+            errorMessage = nil
+
+            do {
+                let result: MonthResponse = try await APIClient.get("/changes/month/\(month)")
+                if result.code == 0, let data = result.data {
+                    monthData = data
+                    if let lastDate = data.dates.last {
+                        selectedDate = lastDate
+                        loadChanges(date: lastDate)
+                    }
+                } else {
+                    errorMessage = result.message ?? "未知错误"
+                }
+            } catch let error as APIClient.APIError {
+                errorMessage = error.errorDescription
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isLoading = false
         }
     }
 
-    private func goToNextMonth() {
-        guard canGoNext else { return }
-        if let newDate = calendar.date(byAdding: .month, value: 1, to: displayedDate) {
-            displayedDate = newDate
-            loadMonthData(month: currentYearMonth)
+    private func loadChanges(date: String) {
+        Task { @MainActor in
+            isLoading = true
+
+            do {
+                let result: ChangesResponse = try await APIClient.get("/changes/\(date)")
+                if result.code == 0, let resultData = result.data {
+                    changesData = resultData
+                }
+            } catch {
+                print("加载变化失败: \(error)")
+            }
+            isLoading = false
         }
     }
 }

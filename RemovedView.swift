@@ -120,28 +120,15 @@ struct RemovedView: View {
 
         Task {
             do {
-                guard let url = URL(string: "\(baseURL)/removed") else {
-                    errorMessage = "URL错误"
-                    isLoading = false
-                    return
-                }
-
-                let (data, response) = try await URLSession.shared.data(from: url)
-
-                guard let httpResponse = response as? HTTPURLResponse,
-                      httpResponse.statusCode == 200 else {
-                    errorMessage = "服务器错误"
-                    isLoading = false
-                    return
-                }
-
-                let result = try JSONDecoder().decode(RemovedResponse.self, from: data)
+                let result: RemovedResponse = try await APIClient.get("/removed")
                 if result.code == 0, let data = result.data {
                     removedData = data
                     selectedDate = sortedDates.first
                 } else {
                     errorMessage = result.message ?? "未知错误"
                 }
+            } catch let error as APIClient.APIError {
+                errorMessage = error.errorDescription
             } catch {
                 errorMessage = error.localizedDescription
             }

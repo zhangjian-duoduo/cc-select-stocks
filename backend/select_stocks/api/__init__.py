@@ -8,9 +8,36 @@ from flask import Flask, jsonify, request
 import pymysql
 import os
 import traceback
+import logging
 from datetime import datetime, timedelta
+from functools import wraps
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[
+        logging.FileHandler('/root/select_stocks/api.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger('api')
 
 app = Flask(__name__)
+
+# API Key 鉴权（从环境变量读取，未设置则使用默认值）
+API_KEY = os.environ.get('API_KEY', 'select-stocks-2024')
+
+def require_api_key(f):
+    """API Key 鉴权装饰器"""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        key = request.headers.get('X-API-Key') or request.args.get('api_key')
+        if key != API_KEY:
+            logger.warning(f"鉴权失败: {request.path} from {request.remote_addr}")
+            return jsonify({'code': 403, 'message': '未授权访问'}), 403
+        return f(*args, **kwargs)
+    return decorated
 
 # 数据库配置（密码从环境变量读取，未设置则使用空密码）
 DB_CONFIG = {
@@ -18,12 +45,31 @@ DB_CONFIG = {
     'user': os.environ.get('DB_USER', 'root'),
     'password': os.environ.get('DB_PASSWORD', ''),
     'database': os.environ.get('DB_NAME', 'select_stocks'),
-    'charset': 'utf8mb4'
+    'charset': 'utf8mb4',
+    'connect_timeout': 10,
+    'read_timeout': 30,
+    'autocommit': True
 }
 
+# 生产环境建议使用 DBUtils 连接池替代每次新建连接:
+#   pip install DBUtils
+#   from dbutils.pooled_db import PooledDB
+#   pool = PooledDB(pymysql, mincached=2, maxcached=10, maxconnections=20, **DB_CONFIG)
+#   def get_db():
+#       return pool.connection()
+
 def get_db():
-    """获取数据库连接"""
-    return pymysql.connect(**DB_CONFIG)
+    """获取数据库连接（带重试）"""
+    import time
+    for attempt in range(3):
+        try:
+            return pymysql.connect(**DB_CONFIG)
+        except pymysql.Error as e:
+            if attempt < 2:
+                logger.warning(f"数据库连接失败(尝试 {attempt+1}/3): {e}")
+                time.sleep(1)
+            else:
+                raise
 
 def extract_quarter(report_name):
     """从报告名称提取季度"""
@@ -41,6 +87,7 @@ def extract_quarter(report_name):
     return ''
 
 @app.route('/api/v1/stocks', methods=['GET'])
+@require_api_key
 def get_stocks():
     """获取选股列表"""
     page = request.args.get('page', 1, type=int)
@@ -113,6 +160,7 @@ def get_stocks():
         conn.close()
 
 @app.route('/api/v1/filter', methods=['POST'])
+@require_api_key
 def filter_stocks():
     """多条件筛选股票"""
     import json
@@ -1409,7 +1457,7 @@ def refresh_analysis():
         updated = 0
         for stock in stocks:
             code = stock['code']
-            print(f"[刷新分析] {code}")
+            logger.info(f"[刷新分析] {code}")
 
             # 分析每只股票
             try:
@@ -1438,7 +1486,7 @@ def refresh_analysis():
                 ))
                 updated += 1
             except Exception as e:
-                print(f"[刷新分析] {code} 失败: {e}")
+                logger.error(f"[刷新分析] {code} 失败: {e}")
                 continue
 
         conn.commit()
@@ -1907,7 +1955,7 @@ def refresh_analysis_scheduled():
         updated = 0
         for stock in stocks:
             code = stock['code']
-            print(f"[定时任务] 分析 {code}")
+            logger.info(f"[定时任务] 分析 {code}")
 
             try:
                 analysis = analyzer.analyze_stock(code)
@@ -1957,7 +2005,7 @@ def refresh_analysis_scheduled():
                     ))
                 updated += 1
             except Exception as e:
-                print(f"[定时任务] {code} 失败: {e}")
+                logger.error(f"[定时任务] {code} 失败: {e}")
                 continue
 
         conn.commit()
@@ -2262,28 +2310,11 @@ def get_stock_financial_history(stock_code):
 
 
 if __name__ == '__main__':
-    # 注册定时任务（下午4点更新分析数据）
-    from datetime import datetime, timedelta
-    import threading
-    import time
+    # 注意：定时任务已由 scheduler_manager.py 的 APScheduler 统一管理（每日16:00执行）
+    # 此处不再启动重复的线程，避免任务被执行两次
 
-    def run_scheduled_task():
-        """下午4点执行分析数据更新"""
-        while True:
-            now = datetime.now()
-            if now.hour == 16 and now.minute == 0:
-                print("[定时任务] 开始执行分析数据更新...")
-                try:
-                    with app.test_request_context():
-                        result = refresh_analysis_scheduled()
-                        print("[定时任务] 完成:", result.get_data(as_text=True))
-                except Exception as e:
-                    print(f"[定时任务] 失败: {e}")
-                    import traceback
-                    traceback.print_exc()
-            time.sleep(60)
-
-    # 启动定时任务检查（在后台线程）
-    threading.Thread(target=run_scheduled_task, daemon=True).start()
-
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # 生产环境应使用 gunicorn 替代 Flask dev server:
+    #   gunicorn -w 4 -b 0.0.0.0:5000 api:app
+    # 开发环境:
+    #   python api/__init__.py
+    app.run(host='0.0.0.0', port=5000, debug=False)
