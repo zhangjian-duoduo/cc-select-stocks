@@ -1,5 +1,17 @@
 import Foundation
 
+// 多自选股列表模型
+struct Watchlist: Codable, Identifiable, Equatable {
+    var id: String = UUID().uuidString
+    var name: String
+    var stockCodes: [String]
+    var createdAt: Date = Date()
+
+    static func == (lhs: Watchlist, rhs: Watchlist) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 struct Stock: Identifiable, Codable {
     var id: String { code }
     let code: String
@@ -14,6 +26,9 @@ struct Stock: Identifiable, Codable {
         self.name = name
         self.price = price
         self.change_pct = change_pct
+        self.concepts = nil
+        self.surge_reason = nil
+        self.surge_concept = nil
     }
 
     // 额外分析数据
@@ -32,11 +47,21 @@ struct Stock: Identifiable, Codable {
     // 财务数据
     var net_profit_yoy: String?  // 净利润同比
     var net_profit_qoq: String?  // 净利润环比
-    var revenue: String?         // 营业收入
-    var book_value_per_share: String?  // 每股净资产
+    var revenue: String?         // 营业收入（如 "2334.33亿"）
+    var book_value_per_share: Double?  // 每股净资产
     var roe: String?             // ROE
     var sector: String?          // 所属行业板块
     var financial_updated_at: String?  // 财务数据更新时间
+    var total_market_cap: Double?   // 总市值（元）
+    var dividend_count: Int?        // 累计分红次数
+    var other_receivables_ratio: Double?  // 其他应收款/总资产(%)
+    var fund_embezzlement_risk: Double?   // 资金占用风险 1=高风险
+    var financial_fraud_risk: Double?     // 财务造假风险 1=有处罚 2=有造假相关处罚
+
+    // 概念板块
+    var concepts: [String]?       // 所属概念板块列表
+    var surge_reason: String?     // 大涨原因（如 "面板板块领涨+3.5%"）
+    var surge_concept: String?    // 驱动概念名称
 
     struct HolderData: Codable {
         var date: String?
@@ -82,8 +107,10 @@ struct Stock: Identifiable, Codable {
         case holders_trend, change_5y, price_percentile, chip_concentration
         case macd_divergence, trend_analysis, price_position, kline
         case kline_daily, kline_weekly, kline_monthly
-        case net_profit_yoy, net_profit_qoq, revenue, book_value_per_share, roe, sector
-        case financial_updated_at
+        case net_profit_yoy, net_profit_qoq, roe, sector, revenue, book_value_per_share
+        case financial_updated_at, total_market_cap, dividend_count
+        case other_receivables_ratio, fund_embezzlement_risk, financial_fraud_risk
+        case concepts, surge_reason, surge_concept
     }
 
     init(from decoder: Decoder) throws {
@@ -99,6 +126,7 @@ struct Stock: Identifiable, Codable {
         price_percentile = try Self.decodeNumeric(container: container, key: .price_percentile)
         chip_concentration = try Self.decodeNumeric(container: container, key: .chip_concentration)
         price_position = try Self.decodeNumeric(container: container, key: .price_position)
+        book_value_per_share = try Self.decodeNumeric(container: container, key: .book_value_per_share)
 
         holders_trend = try container.decodeIfPresent([HolderData].self, forKey: .holders_trend)
         macd_divergence = try container.decodeIfPresent(MACDDivergence.self, forKey: .macd_divergence)
@@ -112,7 +140,19 @@ struct Stock: Identifiable, Codable {
         net_profit_yoy = try container.decodeIfPresent(String.self, forKey: .net_profit_yoy)
         net_profit_qoq = try container.decodeIfPresent(String.self, forKey: .net_profit_qoq)
         roe = try container.decodeIfPresent(String.self, forKey: .roe)
+        revenue = try container.decodeIfPresent(String.self, forKey: .revenue)
         sector = try container.decodeIfPresent(String.self, forKey: .sector)
+        total_market_cap = try Self.decodeNumeric(container: container, key: .total_market_cap)
+        if let divDouble = try Self.decodeNumeric(container: container, key: .dividend_count) {
+            dividend_count = Int(divDouble)
+        }
+        other_receivables_ratio = try Self.decodeNumeric(container: container, key: .other_receivables_ratio)
+        fund_embezzlement_risk = try Self.decodeNumeric(container: container, key: .fund_embezzlement_risk)
+        financial_fraud_risk = try Self.decodeNumeric(container: container, key: .financial_fraud_risk)
+
+        concepts = try container.decodeIfPresent([String].self, forKey: .concepts)
+        surge_reason = try container.decodeIfPresent(String.self, forKey: .surge_reason)
+        surge_concept = try container.decodeIfPresent(String.self, forKey: .surge_concept)
     }
 
     private static func decodeNumeric(container: KeyedDecodingContainer<Stock.CodingKeys>, key: CodingKeys) throws -> Double? {

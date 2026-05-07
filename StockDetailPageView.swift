@@ -43,9 +43,29 @@ struct StockDetailPageView: View {
         }
     }
 
+    /// 只渲染当前页前后各 2 页的窗口，避免 TabView 一次性创建全部 300-500 个 StockDetailContent 导致内存爆炸黑屏
+    private var pageWindow: (stocks: [Stock], startIndex: Int) {
+        guard !allStocks.isEmpty else { return ([], 0) }
+        // 股票数量少时直接全部渲染，无需窗口优化
+        if allStocks.count <= 10 { return (allStocks, 0) }
+        let half = 2
+        let idealEnd = currentPage + half
+        let start: Int
+        if idealEnd > allStocks.count - 1 {
+            start = max(0, allStocks.count - 1 - 2 * half)
+        } else {
+            start = max(0, currentPage - half)
+        }
+        let end = min(allStocks.count - 1, max(start, idealEnd))
+        return (Array(allStocks[start...end]), start)
+    }
+
     var body: some View {
+        let (windowStocks, startIdx) = pageWindow
+
         TabView(selection: $currentPage) {
-            ForEach(Array(allStocks.enumerated()), id: \.offset) { index, stock in
+            ForEach(Array(windowStocks.enumerated()), id: \.element.id) { offset, stock in
+                let realIndex = startIdx + offset
                 StockDetailContent(
                     stock: stock,
                     detailedStock: detailedStocks[stock.code],
@@ -57,13 +77,12 @@ struct StockDetailPageView: View {
                     loadDetail: { loadStockDetail(stock.code) },
                     loadFinancialHistory: loadFinancialHistory
                 )
-                .tag(index)
+                .tag(realIndex)
             }
         }
         .tabViewStyle(.page(indexDisplayMode: .never))
         .background(Color(hex: "121212"))
         .onChange(of: currentPage) { newPage in
-            // 切换页面时预加载相邻股票的详情
             preloadAdjacentDetails(newPage: newPage)
         }
     }
@@ -136,7 +155,7 @@ struct StockDetailContent: View {
 
     // 打开东方财富App
     func openInEastMoney() {
-        let code = stock.code ?? ""
+        let code = stock.code
         guard code.count == 6 else { return }
 
         let prefix: String
@@ -204,6 +223,41 @@ struct StockDetailContent: View {
                             .padding(.vertical, 4)
                             .background(Color(hex: "1E88E5").opacity(0.2))
                             .cornerRadius(4)
+                    }
+                    // 概念板块标签
+                    if let concepts = stock.concepts, !concepts.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(concepts.enumerated()), id: \.offset) { index, concept in
+                                    Text(concept)
+                                        .font(.caption2)
+                                        .foregroundColor(Color(hex: conceptLabelColor(index)))
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(Color(hex: conceptLabelColor(index)).opacity(0.15))
+                                        .cornerRadius(6)
+                                }
+                            }
+                        }
+                    }
+                    // 大涨原因
+                    if let surgeReason = stock.surge_reason, let c_pct = stock.change_pct, c_pct >= 5.0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: c_pct >= 9.9 ? "bolt.fill" : "flame.fill")
+                                .foregroundColor(Color(hex: "FF6B00"))
+                                .font(.caption)
+                            Text("大涨原因:")
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                            Text(surgeReason)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .foregroundColor(Color(hex: "FF6B00"))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(hex: "FF6B00").opacity(0.10))
+                        .cornerRadius(8)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1013,6 +1067,12 @@ struct StockDetailContent: View {
         else { return "筹码分散，上涨动力不足" }
     }
 
+    func conceptLabelColor(_ index: Int) -> String {
+        let colors = ["4FC3F7", "AED581", "FFB74D", "CE93D8", "EF5350",
+                      "26C6DA", "9CCC65", "FFA726", "AB47BC", "42A5F5"]
+        return colors[index % colors.count]
+    }
+
     func formatVolume(_ volume: Double) -> String {
         if volume >= 100000000 {
             return String(format: "%.2f亿", volume / 100000000)
@@ -1062,9 +1122,11 @@ struct 退市风险分析View: View {
 
                         // 详情
                         Text(item.detail)
-                            .font(.caption)
+                            .font(.caption2)
                             .foregroundColor(.gray)
-                            .frame(width: 100, alignment: .trailing)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 160, alignment: .trailing)
                     }
                     .padding(.vertical, 4)
                 }
@@ -1078,7 +1140,6 @@ struct 退市风险分析View: View {
     private func analyzeRisks() -> [(rule: String, status: String, detail: String)] {
         var results: [(rule: String, status: String, detail: String)] = []
         let code = stock.code
-        let isMainBoard = code.hasPrefix("60") || code.hasPrefix("00")
         let isGEM = code.hasPrefix("30")
         let isSTAR = code.hasPrefix("68")
 
@@ -1093,75 +1154,132 @@ struct 退市风险分析View: View {
         let isRevenueLow = checkRevenueLow(isGEM: isGEM, isSTAR: isSTAR)
 
         if isProfitNegative && isRevenueLow {
-            results.append(("净利润+营收(\(revenueThreshold))", "危险", "净利润为负+营收低于门槛"))
+            results.append(("净利润+营收(\(revenueThreshold))", "危险", "触发*ST；次年仍不达标→退市"))
         } else if isProfitNegative {
-            results.append(("净利润+营收(\(revenueThreshold))", "警示", "净利润为负，需结合营收"))
-        } else if let yoy = stock.net_profit_yoy, let yoyVal = Double(yoy), yoyVal >= 0 {
-            results.append(("净利润+营收(\(revenueThreshold))", "安全", "净利同比增长\(Int(yoyVal))%"))
+            results.append(("净利润+营收(\(revenueThreshold))", "警示", "净利为负，若营收<\(revenueThreshold)→*ST"))
+        } else if let yoy = stock.net_profit_yoy {
+            let clean = yoy.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
+            if let yoyVal = Double(clean), yoyVal >= 0 {
+                results.append(("净利润+营收(\(revenueThreshold))", "安全", "净利同比+\(Int(yoyVal))%，营收\(stock.revenue ?? "?")"))
+            } else {
+                results.append(("净利润+营收(\(revenueThreshold))", "未知", "净利为负，营收数据缺失"))
+            }
         } else if let revenue = stock.revenue {
-            results.append(("净利润+营收(\(revenueThreshold))", "安全", "营收\(revenue)"))
+            results.append(("净利润+营收(\(revenueThreshold))", "安全", "营收\(revenue)，高于\(revenueThreshold)门槛"))
         } else {
-            results.append(("净利润+营收(\(revenueThreshold))", "未知", "需营收数据"))
+            results.append(("净利润+营收(\(revenueThreshold))", "未知", "净利及营收数据缺失"))
         }
 
-        // 2. ROE
-        if let roe = stock.roe, let roeVal = Double(roe), roeVal < 0 {
-            results.append(("ROE", "警示", "ROE为\(roe)%"))
-        } else if let roe = stock.roe, let roeVal = Double(roe), roeVal >= 0 {
-            results.append(("ROE", "安全", "ROE为\(roe)%"))
+        // 2. ROE（辅助指标，非直接ST标准）
+        if let roe = stock.roe {
+            let clean = roe.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
+            if let roeVal = Double(clean), roeVal < 0 {
+                results.append(("ROE（辅助）", "警示", "ROE为负，持续亏损将触发净利+营收*ST"))
+            } else if let roeVal = Double(clean), roeVal >= 0 {
+                results.append(("ROE（辅助）", "安全", "ROE为\(roe)%"))
+            } else {
+                results.append(("ROE（辅助）", "未知", "无法解析"))
+            }
         } else {
-            results.append(("ROE", "未知", "缺少数据"))
+            results.append(("ROE（辅助）", "未知", "缺少数据"))
         }
 
-        // 3. 净资产为负（使用每股净资产判断）
-        if let bv = stock.book_value_per_share, let bvVal = Double(bv), bvVal < 0 {
-            results.append(("净资产为负", "危险", "每股净资产\(bv)元"))
-        } else if let bv = stock.book_value_per_share {
-            results.append(("净资产为负", "安全", "每股净资产\(bv)元"))
+        // 3. 净资产为负
+        if let bvVal = stock.book_value_per_share, bvVal < 0 {
+            results.append(("净资产为负", "危险", "触发*ST；次年仍为负→退市"))
+        } else if let bvVal = stock.book_value_per_share {
+            results.append(("净资产为负", "安全", "每股净资产\(String(format: "%.2f", bvVal))元"))
         } else {
             results.append(("净资产为负", "未知", "需每股净资产"))
         }
 
         // 4. 审计报告
-        results.append(("审计报告非标", "未知", "需审计数据"))
+        results.append(("审计报告非标", "需人工核验", "无法表示/否定意见→*ST→退市"))
 
-        // 5. 分红不达标
-        results.append(("分红不达标", "未知", "需分红数据"))
+        // 5. 分红不达标（连续3年不分红 → ST）
+        if let divCount = stock.dividend_count {
+            if divCount == 0 {
+                results.append(("分红不达标", "警示", "从未分红，连续3年→ST→*ST"))
+            } else if divCount < 3 {
+                results.append(("分红不达标", "警示", "仅\(Int(divCount))次分红，缺\(3-Int(divCount))年→ST"))
+            } else {
+                results.append(("分红不达标", "安全", "累计\(Int(divCount))次，满足要求"))
+            }
+        } else {
+            results.append(("分红不达标", "未知", "需分红数据"))
+        }
 
         // ===== 交易类规则 =====
 
-        // 6. 股价<1元
+        // 6. 股价<1元（连续20日 → 直接退市）
         if let price = stock.price, price < 1.0 {
-            results.append(("股价<1元", "危险", "连续20日退市"))
+            results.append(("股价<1元", "危险", "连续20日<1元→直接退市（无*ST）"))
         } else if let price = stock.price, price < 2.0 {
-            results.append(("股价<1元", "警示", "接近红线"))
+            results.append(("股价<1元", "警示", "股价\(String(format: "%.2f", price))，若<1元+20日→退市"))
         } else if let price = stock.price {
-            results.append(("股价<1元", "安全", "股价\(String(format: "%.2f", price))"))
+            results.append(("股价<1元", "安全", "股价\(String(format: "%.2f", price))，远高于1元红线"))
         } else {
             results.append(("股价<1元", "未知", "需股价数据"))
         }
 
-        // 7. 市值退市
-        results.append(("市值<5亿", "未知", "需市值数据"))
+        // 7. 市值退市（连续20日主板<5亿/创业板科创板<3亿）
+        if let cap = stock.total_market_cap {
+            let capYi = cap / 100_000_000
+            let threshold: Double = {
+                if code.hasPrefix("68") || code.hasPrefix("30") { return 3 }
+                return 5
+            }()
+            let boardName = code.hasPrefix("68") ? "科创板" : (code.hasPrefix("30") ? "创业板" : "主板")
+            if capYi < threshold {
+                results.append(("市值退市", "危险", "连续20日<\(String(format: "%.0f", threshold))亿→直接退市"))
+            } else if capYi < threshold * 2 {
+                results.append(("市值退市", "警示", "市值\(String(format: "%.1f", capYi))亿，\(boardName)门槛\(String(format: "%.0f", threshold))亿"))
+            } else {
+                results.append(("市值退市", "安全", "市值\(String(format: "%.1f", capYi))亿，高于\(boardName)\(String(format: "%.0f", threshold))亿门槛"))
+            }
+        } else {
+            results.append(("市值退市", "未知", "需市值数据"))
+        }
 
         // ===== 规范类规则 =====
 
-        results.append(("资金占用", "未知", "需资金数据"))
-        results.append(("内控失效", "未知", "需内控数据"))
+        // 8. 资金占用（大股东占用>2亿+>30% → *ST）
+        if let risk = stock.fund_embezzlement_risk, risk > 0 {
+            let ratio = stock.other_receivables_ratio ?? 0
+            results.append(("资金占用", "危险", "大股东占用>2亿+占比\(String(format: "%.0f", ratio))%→*ST→退市"))
+        } else if let ratio = stock.other_receivables_ratio {
+            if ratio > 15 {
+                results.append(("资金占用", "警示", "占比\(String(format: "%.0f", ratio))%，若>30%+>2亿→*ST"))
+            } else {
+                results.append(("资金占用", "安全", "占比\(String(format: "%.0f", ratio))%，低于15%警戒线"))
+            }
+        } else {
+            results.append(("资金占用", "未知", "需资产负债表数据"))
+        }
+        results.append(("内控失效", "需人工核验", "否定/无法表示意见→*ST→退市"))
 
         // ===== 重大违法类 =====
 
-        results.append(("财务造假", "未知", "需调查"))
+        // 10. 财务造假（重大违法 → 直接退市）
+        if let risk = stock.financial_fraud_risk, risk >= 2 {
+            results.append(("财务造假", "危险", "有造假处罚→重大违法退市"))
+        } else if let risk = stock.financial_fraud_risk, risk >= 1 {
+            results.append(("财务造假", "警示", "有处罚记录，若重大违法→退市"))
+        } else if stock.financial_fraud_risk != nil {
+            results.append(("财务造假", "安全", "近3年无处罚记录"))
+        } else {
+            results.append(("财务造假", "需人工核验", "请查阅证监会处罚公告"))
+        }
 
         return results
     }
 
     // 检查净利润是否为负
     private func checkProfitNegative() -> Bool {
-        if let yoy = stock.net_profit_yoy, let yoyVal = Double(yoy) {
-            return yoyVal < 0
-        }
-        return false
+        guard let yoy = stock.net_profit_yoy else { return false }
+        let clean = yoy.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
+        guard let value = Double(clean) else { return false }
+        return value < 0
     }
 
     // 检查营收是否低于门槛

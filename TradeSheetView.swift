@@ -8,6 +8,7 @@ struct TradeSheetView: View {
     @Binding var quantity: String
 
     @EnvironmentObject var stockViewModel: StockViewModel
+    @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -76,18 +77,40 @@ struct TradeSheetView: View {
                 .background(Color(hex: "1E1E1E"))
                 .cornerRadius(8)
 
+                // 错误提示
+                if let error = errorMessage {
+                    Text(error)
+                        .foregroundColor(Color(hex: "F44336"))
+                        .font(.caption)
+                }
+
                 // 确认按钮
                 Button {
-                    if let qty = Int(quantity), qty >= 100, qty % 100 == 0, let price = stock.price {
-                        if selectedAction == 0 {
-                            // 买入
-                            stockViewModel.buyStock(code: stock.code, name: stock.name, price: price, quantity: qty)
+                    errorMessage = nil
+                    guard let qty = Int(quantity) else {
+                        errorMessage = "请输入有效数量"
+                        return
+                    }
+                    guard qty >= 100 else {
+                        errorMessage = "最少交易100股"
+                        return
+                    }
+                    guard qty % 100 == 0 else {
+                        errorMessage = "数量必须为100的整数倍"
+                        return
+                    }
+                    guard let price = stock.price else {
+                        errorMessage = "无法获取当前价格"
+                        return
+                    }
+                    if selectedAction == 0 {
+                        stockViewModel.buyStock(code: stock.code, name: stock.name, price: price, quantity: qty)
+                        isPresented = false
+                    } else {
+                        if stockViewModel.sellStock(code: stock.code, price: price, quantity: qty) {
                             isPresented = false
                         } else {
-                            // 卖出：只有成功才关闭
-                            if stockViewModel.sellStock(code: stock.code, price: price, quantity: qty) {
-                                isPresented = false
-                            }
+                            errorMessage = "持仓不足，无法卖出"
                         }
                     }
                 } label: {

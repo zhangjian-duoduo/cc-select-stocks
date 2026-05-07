@@ -5,11 +5,10 @@ import UIKit
 struct StockListView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
     @State private var selectedStockCode: String = ""
+    @State private var selectedStockIndex: Int = 0
     @State private var showDetailPage = false
-
-    private var resolvedStockIndex: Int {
-        stockViewModel.filteredStocks.firstIndex(where: { $0.code == selectedStockCode }) ?? 0
-    }
+    @State private var showWatchlistPicker = false
+    @State private var pendingFavoriteStock: Stock? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,9 +68,10 @@ struct StockListView: View {
                     ForEach(Array(stockViewModel.filteredStocks.enumerated()), id: \.element.code) { index, stock in
                         Button {
                             selectedStockCode = stock.code
+                            selectedStockIndex = index
                             showDetailPage = true
                         } label: {
-                            StockCard(stock: stock, sortOption: stockViewModel.sortOption)
+                            StockCard(stock: stock, sortOption: stockViewModel.sortOption, showWatchlistPicker: $showWatchlistPicker, pendingFavoriteStock: $pendingFavoriteStock)
                         }
                         .buttonStyle(PlainButtonStyle())
                         .listRowBackground(Color(hex: "1E1E1E"))
@@ -101,13 +101,25 @@ struct StockListView: View {
             await stockViewModel.refresh()
         }
         .navigationDestination(isPresented: $showDetailPage) {
-            let idx = resolvedStockIndex
-            if idx < stockViewModel.filteredStocks.count {
+            if selectedStockIndex < stockViewModel.filteredStocks.count {
                 StockDetailPageView(
-                    currentIndex: idx,
+                    currentIndex: selectedStockIndex,
                     allStocks: stockViewModel.filteredStocks,
-                    currentPage: .constant(idx)
+                    currentPage: $selectedStockIndex
                 )
+            }
+        }
+        .confirmationDialog("添加到自选列表", isPresented: $showWatchlistPicker, titleVisibility: .visible) {
+            ForEach(stockViewModel.watchlists) { list in
+                Button(list.name) {
+                    if let stock = pendingFavoriteStock {
+                        stockViewModel.addStockToWatchlist(watchlistId: list.id, code: stock.code)
+                        pendingFavoriteStock = nil
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {
+                pendingFavoriteStock = nil
             }
         }
     }
@@ -143,31 +155,31 @@ struct SortButton: View {
 struct StockCard: View {
     let stock: Stock
     var sortOption: SortOption = .position
+    @Binding var showWatchlistPicker: Bool
+    @Binding var pendingFavoriteStock: Stock?
     @EnvironmentObject var stockViewModel: StockViewModel
 
-    init(stock: Stock, sortOption: SortOption = .position) {
+    init(stock: Stock, sortOption: SortOption = .position, showWatchlistPicker: Binding<Bool> = .constant(false), pendingFavoriteStock: Binding<Stock?> = .constant(nil)) {
         self.stock = stock
         self.sortOption = sortOption
+        self._showWatchlistPicker = showWatchlistPicker
+        self._pendingFavoriteStock = pendingFavoriteStock
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // 第一行：板块/名称代码 + 价格 + 当日涨跌 + 收藏
+            // 第一行：名称 + 价格 + 当日涨跌 + 收藏
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    if let sector = stock.sector, !sector.isEmpty {
-                        Text(sector)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                    } else {
-                        Text(stock.name)
-                            .font(.headline)
-                            .foregroundColor(.white)
-                        Text(stock.code)
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                    }
-                    if let sector = stock.sector, !sector.isEmpty {
+                    Text(stock.name)
+                        .font(.headline)
+                        .foregroundColor(.white)
+                    HStack(spacing: 4) {
+                        if let sector = stock.sector, !sector.isEmpty {
+                            Text(sector)
+                                .font(.caption2)
+                                .foregroundColor(.orange)
+                        }
                         Text(stock.code)
                             .font(.caption)
                             .foregroundColor(.gray)
@@ -203,7 +215,14 @@ struct StockCard: View {
 
                     Button {
                         withAnimation(.easeInOut(duration: 0.2)) {
-                            stockViewModel.toggleFavorite(stock)
+                            if stockViewModel.isFavorited(stock.code) {
+                                stockViewModel.toggleFavorite(stock)
+                            } else if stockViewModel.watchlists.count > 1 {
+                                pendingFavoriteStock = stock
+                                showWatchlistPicker = true
+                            } else {
+                                stockViewModel.toggleFavorite(stock)
+                            }
                         }
                     } label: {
                         Image(systemName: stockViewModel.isFavorited(stock.code) ? "star.fill" : "star")
@@ -212,6 +231,44 @@ struct StockCard: View {
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
+            }
+
+            // 概念板块标签 + 大涨原因
+            if let concepts = stock.concepts, !concepts.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(concepts.prefix(3).enumerated()), id: \.offset) { index, concept in
+                        Text(concept)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(Color(hex: conceptColor(index)))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color(hex: conceptColor(index)).opacity(0.25))
+                            .cornerRadius(4)
+                    }
+                    if concepts.count > 3 {
+                        Text("+\(concepts.count - 3)")
+                            .font(.system(size: 9))
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    if let surgeReason = stock.surge_reason, let changePct = stock.change_pct, changePct >= 5.0 {
+                        HStack(spacing: 2) {
+                            Image(systemName: "flame.fill")
+                                .font(.system(size: 9))
+                                .foregroundColor(Color(hex: "FF6B00"))
+                            Text(surgeReason)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundColor(Color(hex: "FF6B00"))
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color(hex: "FF6B00").opacity(0.12))
+                        .cornerRadius(4)
+                    }
+                }
+            } else if stock.concepts != nil {
+                // concepts 为空数组，不显示
+                EmptyView()
             }
 
             // 第二行：指标们
@@ -360,162 +417,86 @@ struct StockCard: View {
         return Color.gray
     }
 
-    // 退市风险预警（根据不同市场差异化规则）
-    // 主板：净利润为负+营收<3亿 或 净资产为负 → *ST
-    // 创业板：净利润为负+营收<1亿 或 净资产为负 → *ST
-    // 科创板：净利润为负+营收<5000万 或 净资产为负 → *ST
+    // 退市风险预警（2025年退市新规）
+    // *ST: 净利润为负+营收不达标 或 净资产为负
+    // 警示: 净利润为负、股价<1元、ROE为负
     func riskLevel() -> (level: String, detail: String) {
-        // 检查各项风险指标
-        let roeNegative = checkROE()
-        let profitNegative = checkProfit()
-        let priceLow = checkPrice()
+        let code = stock.code
 
-        // *ST条件：净利润同比下降超过50%
-        if profitNegative {
-            return ("*ST", "退市风险")
+        let profitNegative: Bool = {
+            guard let yoy = stock.net_profit_yoy else { return false }
+            let clean = yoy.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
+            guard let value = Double(clean) else { return false }
+            return value < 0
+        }()
+
+        // 营收转元（如 "2334.33亿" → 233433000000）
+        let revenueYuan: Double? = {
+            guard let rev = stock.revenue, !rev.isEmpty else { return nil }
+            let numStr = rev.replacingOccurrences(of: "亿", with: "").replacingOccurrences(of: "万", with: "").replacingOccurrences(of: "元", with: "")
+            guard let num = Double(numStr) else { return nil }
+            if rev.contains("万") { return num * 10000 }
+            if rev.contains("亿") { return num * 100000000 }
+            return num
+        }()
+
+        // 营收门槛（2025新规: 主板3亿/创业板1亿/科创板5000万）
+        let revenueThreshold: Double = {
+            if code.hasPrefix("68") { return 50_000_000 }
+            if code.hasPrefix("30") { return 100_000_000 }
+            return 300_000_000
+        }()
+
+        let bvNegative: Bool = {
+            guard let bv = stock.book_value_per_share else { return false }
+            return bv < 0
+        }()
+
+        let priceVal = stock.price ?? 0
+
+        // 财务造假风险
+        let fraudRisk = stock.financial_fraud_risk ?? 0
+        let embezzlementRisk = stock.fund_embezzlement_risk ?? 0
+        let otherReceivablesRatio = stock.other_receivables_ratio ?? 0
+
+        // *ST 退市风险警示
+        if fraudRisk >= 2 {
+            return ("*ST", "财务造假处罚")
+        }
+        if profitNegative, let rev = revenueYuan, rev < revenueThreshold {
+            return ("*ST", "净利负+营收不达标")
+        }
+        if bvNegative {
+            return ("*ST", "净资产为负")
         }
 
-        // 警示条件：ROE为负
-        if roeNegative {
+        // 警示
+        if fraudRisk >= 1 {
+            return ("警示", "有财务违规处罚")
+        }
+        if embezzlementRisk >= 1 {
+            return ("警示", "资金占用风险")
+        }
+        if otherReceivablesRatio > 30 {
+            return ("警示", "其他应收款占比>30%")
+        }
+        if profitNegative && priceVal < 1.0 && priceVal > 0 {
+            return ("警示", "净利负+股价<1元")
+        }
+        if priceVal < 1.0 && priceVal > 0 {
+            return ("警示", "股价<1元")
+        }
+        if profitNegative {
+            return ("警示", "净利润为负")
+        }
+        if let roeStr = stock.roe, let roeVal = Double(roeStr.replacingOccurrences(of: "%", with: "")), roeVal < 0 {
             return ("警示", "ROE为负")
         }
-
-        // 低股��警示：股价<1元
-        if priceLow {
-            return ("警示", "低价")
+        if let divCount = stock.dividend_count, divCount == 0 {
+            return ("警示", "从未分红")
         }
 
         return ("安全", "")
-    }
-
-    // 检查ROE是否为负
-    private func checkROE() -> Bool {
-        guard let roe = stock.roe else { return false }
-        let roeClean = roe.replacingOccurrences(of: "%", with: "")
-        guard let value = Double(roeClean) else { return false }
-        return value < 0
-    }
-
-    // 检查净利润是否为负或同比下降
-    private func checkProfit() -> Bool {
-        guard let yoy = stock.net_profit_yoy else { return false }
-        let yoyClean = yoy.replacingOccurrences(of: "%", with: "")
-        guard let value = Double(yoyClean) else { return false }
-        return value < -50  // 净利润同比下降超过50%
-    }
-
-    // 检查股价是否过低
-    private func checkPrice() -> Bool {
-        guard let price = stock.price else { return false }
-        return price < 1.0  // 连续20交易日<1元直接退市
-    }
-
-    // 检查每股净资产是否为负（破净风险）
-    private func checkNAV() -> Bool {
-        guard let bvps = stock.book_value_per_share,
-              let val = Double(bvps) else { return false }
-        return val < 0
-    }
-
-    // 详细退市风险分析（用于详情页）
-    func detailedRiskAnalysis() -> [(rule: String, status: String, detail: String)] {
-        var results: [(rule: String, status: String, detail: String)] = []
-        let code = stock.code
-        let isMainBoard = code.hasPrefix("60") || code.hasPrefix("00")
-        let isGEM = code.hasPrefix("30")
-        let isSTAR = code.hasPrefix("68")
-
-        // ===== 财务类规则 =====
-
-        // 1. 净利润+营收组合指标
-        let revenueThreshold = isSTAR ? "5000万" : (isGEM ? "1亿" : "3亿")
-        let profitStatus: String
-        let profitDetail: String
-        if let yoy = stock.net_profit_yoy {
-            let yoyClean = yoy.replacingOccurrences(of: "%", with: "")
-            if let yoyVal = Double(yoyClean), yoyVal < 0 {
-                profitStatus = "警示"
-                profitDetail = "净利润同比下降\(Int(yoyVal))%，需结合营收判断"
-            } else if let yoyVal = Double(yoyClean), yoyVal >= 0 {
-                profitStatus = "安全"
-                profitDetail = "净利润同比增长\(Int(yoyVal))%"
-            } else {
-                profitStatus = "未知"
-                profitDetail = "缺少净利润数据"
-            }
-        } else {
-            profitStatus = "未知"
-            profitDetail = "缺少净利润数据"
-        }
-        results.append(("净利润+营收(\(revenueThreshold))", profitStatus, profitDetail))
-
-        // 2. 净资产
-        results.append(("净资产为负", "未知", "缺少每股净资产数据"))
-
-        // 3. ROE
-        let roeStatus: String
-        let roeDetail: String
-        if let roe = stock.roe {
-            let roeClean = roe.replacingOccurrences(of: "%", with: "")
-            if let roeVal = Double(roeClean), roeVal < 0 {
-                roeStatus = "警示"
-                roeDetail = "ROE为\(roe)%，亏损"
-            } else if let roeVal = Double(roeClean), roeVal >= 0 {
-                roeStatus = "安全"
-                roeDetail = "ROE为\(roe)%"
-            } else {
-                roeStatus = "未知"
-                roeDetail = "缺少ROE数据"
-            }
-        } else {
-            roeStatus = "未知"
-            roeDetail = "缺少ROE数据"
-        }
-        results.append(("ROE", roeStatus, roeDetail))
-
-        // 4. 审计意见
-        results.append(("审计报告非标", "未知", "需审计报告数据"))
-
-        // 5. 分红不达标
-        results.append(("分红不达标", "未知", "需分红数据"))
-
-        // ===== 交易类规则 =====
-
-        // 6. 股价<1元
-        let priceStatus: String
-        let priceDetail: String
-        if let price = stock.price, price < 1.0 {
-            priceStatus = "危险"
-            priceDetail = "股价\(String(format: "%.2f", price))元，连续20日<1元直接退市"
-        } else if let price = stock.price, price < 2.0 {
-            priceStatus = "警示"
-            priceDetail = "股价\(String(format: "%.2f", price))元，接近退市红线"
-        } else if let price = stock.price {
-            priceStatus = "安全"
-            priceDetail = "股价\(String(format: "%.2f", price))元"
-        } else {
-            priceStatus = "未知"
-            priceDetail = "缺少股价数据"
-        }
-        results.append(("股价<1元", priceStatus, priceDetail))
-
-        // 7. 市值退市
-        results.append(("市值<5亿", "未知", "需市值数据"))
-
-        // ===== 规范类规则 =====
-
-        // 8. 资金占用
-        results.append(("资金占用", "未知", "需资金占用数据"))
-
-        // 9. 内控失效
-        results.append(("内控失效", "未知", "需内控审计数据"))
-
-        // ===== 重大违法类 =====
-
-        // 10. 财务造假
-        results.append(("财务造假", "未知", "需调查确认"))
-
-        return results
     }
 
     func divergenceDots() -> String {
@@ -587,6 +568,12 @@ struct StockCard: View {
         let pct = Double(newest - oldest) / Double(oldest) * 100
         if pct > 0 { return "+\(String(format: "%.0f", pct))%" }
         else { return "\(String(format: "%.0f", pct))%" }
+    }
+
+    func conceptColor(_ index: Int) -> String {
+        let colors = ["4FC3F7", "AED581", "FFB74D", "CE93D8", "EF5350",
+                      "26C6DA", "9CCC65", "FFA726", "AB47BC", "42A5F5"]
+        return colors[index % colors.count]
     }
 }
 
