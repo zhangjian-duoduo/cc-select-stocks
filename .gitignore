@@ -47,3 +47,4 @@ backup/
 # Misc
 *.log
 *.tmp._*.swift
+._*
