@@ -21,7 +21,7 @@ struct TradeSheetView: View {
                         .foregroundColor(.white)
                     Text(stock.code)
                         .foregroundColor(.gray)
-                    if let price = stock.price {
+                    if let price = stockViewModel.latestPrice(for: stock.code) {
                         Text("当前价格: ¥\(String(format: "%.2f", price))")
                             .font(.headline)
                             .foregroundColor(.white)
@@ -34,7 +34,7 @@ struct TradeSheetView: View {
 
                 // 持仓信息
                 if let position = stockViewModel.getPosition(stock.code) {
-                    let currentPrice = stock.price ?? position.currentPrice
+                    let currentPrice = stockViewModel.latestPrice(for: stock.code) ?? position.currentPrice
                     VStack(spacing: 4) {
                         Text("当前持仓")
                             .font(.subheadline)
@@ -99,7 +99,7 @@ struct TradeSheetView: View {
                         errorMessage = "数量必须为100的整数倍"
                         return
                     }
-                    guard let price = stock.price else {
+                    guard let price = stockViewModel.latestPrice(for: stock.code) else {
                         errorMessage = "无法获取当前价格"
                         return
                     }

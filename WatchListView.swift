@@ -21,11 +21,12 @@ struct WatchListView: View {
     @State private var showManageSheet = false
 
     private var filteredFavorites: [Stock] {
+        let source = stockViewModel.sortedFavoritedStocks
         if searchText.isEmpty {
-            return stockViewModel.favoritedStocks
+            return source
         }
         let query = searchText.lowercased()
-        return stockViewModel.favoritedStocks.filter { stock in
+        return source.filter { stock in
             stock.code.lowercased().contains(query) ||
             stock.name.lowercased().contains(query) ||
             StockViewModel.pinyinInitials(stock.name).contains(query)
@@ -47,8 +48,8 @@ struct WatchListView: View {
                 // 搜索栏
                 searchBar
 
-                // 添加股票按钮
-                addStockButton
+                // 排序选择器
+                sortPicker
 
                 // 股票列表
                 stockList
@@ -67,6 +68,28 @@ struct WatchListView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .navigationBarLeading) {
+                if !stockViewModel.currentWatchlistCodes.isEmpty {
+                    if isSelectionMode {
+                        Button("全选") {
+                            selectedCodes = Set(filteredFavorites.map { $0.code })
+                        }
+                        .foregroundColor(Color(hex: "1E88E5"))
+                    } else {
+                        Button {
+                            showAddStockSheet = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus.circle.fill")
+                                    .font(.subheadline)
+                                Text("添加股票")
+                                    .font(.subheadline)
+                            }
+                            .foregroundColor(Color(hex: "1E88E5"))
+                        }
+                    }
+                }
+            }
             ToolbarItem(placement: .navigationBarTrailing) {
                 if !stockViewModel.currentWatchlistCodes.isEmpty {
                     Button(isSelectionMode ? "取消" : "选择") {
@@ -253,27 +276,38 @@ struct WatchListView: View {
         .padding(.vertical, 8)
     }
 
-    // MARK: - 添加股票按钮
+    // MARK: - 排序选择器
 
-    private var addStockButton: some View {
-        Button {
-            showAddStockSheet = true
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "plus.circle.fill")
-                    .font(.subheadline)
-                Text("添加股票")
-                    .font(.subheadline)
+    private var sortPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SortOption.allCases, id: \.self) { option in
+                    Button {
+                        if stockViewModel.watchlistSortOption == option {
+                            stockViewModel.watchlistSortAscending.toggle()
+                        } else {
+                            stockViewModel.watchlistSortOption = option
+                            stockViewModel.watchlistSortAscending = false
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(option.rawValue)
+                            if stockViewModel.watchlistSortOption == option {
+                                Image(systemName: stockViewModel.watchlistSortAscending ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(stockViewModel.watchlistSortOption == option ? .white : .gray)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(stockViewModel.watchlistSortOption == option ? Color(hex: "1E88E5") : Color(hex: "2C2C2C"))
+                        .cornerRadius(14)
+                    }
+                }
             }
-            .foregroundColor(Color(hex: "1E88E5"))
-            .padding(.vertical, 6)
             .padding(.horizontal, 16)
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(hex: "1E88E5").opacity(0.4), lineWidth: 1)
-            )
         }
-        .padding(.horizontal, 16)
         .padding(.bottom, 4)
     }
 
@@ -321,6 +355,9 @@ struct WatchListView: View {
         .listStyle(.plain)
         .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
         .listRowSeparator(.hidden)
+        .refreshable {
+            stockViewModel.refreshLivePrices()
+        }
     }
 
     // MARK: - 批量买入栏
@@ -372,6 +409,8 @@ struct AddStockSheetView: View {
     @State private var searchQuery = ""
     @State private var searchResults: [Stock] = []
     @State private var isSearching = false
+    @State private var searchError: String?
+    @State private var searchTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -409,8 +448,18 @@ struct AddStockSheetView: View {
                     Spacer()
                 } else if searchResults.isEmpty && !searchQuery.isEmpty {
                     Spacer()
-                    Text("未找到匹配的股票")
-                        .foregroundColor(.gray)
+                    if let error = searchError {
+                        VStack(spacing: 8) {
+                            Text("搜索失败")
+                                .foregroundColor(.red)
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.gray)
+                        }
+                    } else {
+                        Text("未找到匹配的股票")
+                            .foregroundColor(.gray)
+                    }
                     Spacer()
                 } else {
                     List {
@@ -456,16 +505,18 @@ struct AddStockSheetView: View {
         let q = searchQuery.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty, q.count >= 1 else {
             searchResults = []
+            searchError = nil
             return
         }
 
-        // Debounce: 只在最后一次输入300ms后执行搜索
+        // Debounce: 取消上一次未完成的搜索任务
+        searchTask?.cancel()
         let currentQuery = q
-        Task {
+        searchTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000)
             guard currentQuery == searchQuery.trimmingCharacters(in: .whitespaces) else { return }
 
-            await MainActor.run { isSearching = true }
+            await MainActor.run { isSearching = true; searchError = nil }
 
             do {
                 let result: StockResponse = try await APIClient.get(
@@ -477,6 +528,9 @@ struct AddStockSheetView: View {
                 await MainActor.run {
                     if result.code == 0 {
                         searchResults = result.data ?? []
+                    } else {
+                        searchResults = []
+                        searchError = result.message ?? "搜索失败"
                     }
                     isSearching = false
                 }
@@ -484,6 +538,7 @@ struct AddStockSheetView: View {
                 await MainActor.run {
                     searchResults = []
                     isSearching = false
+                    searchError = error.localizedDescription
                 }
             }
         }

@@ -23,10 +23,21 @@ struct StockListView: View {
                     .foregroundColor(.gray)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                // 选股类型切换
+                Picker("选股类型", selection: $stockViewModel.selectionType) {
+                    ForEach(SelectionType.allCases, id: \.self) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color(hex: "1E1E1E"))
+
                 // 排序选项栏
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 12) {
-                        ForEach(SortOption.allCases, id: \.self) { option in
+                    HStack(spacing: 8) {
+                        ForEach(SortOption.allCases.filter { $0 != .added }, id: \.self) { option in
                             SortButton(
                                 title: option.rawValue,
                                 isSelected: stockViewModel.sortOption == option,
@@ -37,7 +48,7 @@ struct StockListView: View {
                         }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 6)
                 }
                 .background(Color(hex: "1E1E1E"))
 
@@ -84,7 +95,7 @@ struct StockListView: View {
         }
         .background(Color(hex: "121212"))
         .navigationTitle(stockViewModel.activeFilters.isEmpty
-            ? "智能选股 (\(stockViewModel.filteredStocks.count))"
+            ? "\(stockViewModel.selectionType.rawValue) (\(stockViewModel.filteredStocks.count))"
             : "筛选结果 (\(stockViewModel.filteredStocks.count))")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -135,19 +146,18 @@ struct SortButton: View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Text(title)
-                    .font(.subheadline)
-                    .fontWeight(isSelected ? .semibold : .regular)
+                    .font(.caption)
 
                 if isSelected, let ascending = isAscending {
                     Image(systemName: ascending ? "chevron.up" : "chevron.down")
-                        .font(.caption)
+                        .font(.system(size: 10, weight: .bold))
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(isSelected ? Color(hex: "1E88E5") : Color(hex: "2C2C2C"))
             .foregroundColor(isSelected ? .white : .gray)
-            .cornerRadius(20)
+            .cornerRadius(14)
         }
     }
 }
@@ -167,38 +177,41 @@ struct StockCard: View {
     }
 
     var body: some View {
+        let live = stockViewModel.livePrices[stock.code]
+        let displayPrice = live?.price ?? stock.price ?? 0
+        let displayChangePct = live?.changePct ?? stock.change_pct ?? 0
+
         VStack(alignment: .leading, spacing: 4) {
             // 第一行：名称 + 价格 + 当日涨跌 + 收藏
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(stock.name)
-                        .font(.headline)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.white)
                     HStack(spacing: 4) {
                         if let sector = stock.sector, !sector.isEmpty {
                             Text(sector)
-                                .font(.caption2)
+                                .font(.system(size: 9))
                                 .foregroundColor(.orange)
                         }
                         Text(stock.code)
-                            .font(.caption)
+                            .font(.system(size: 10))
                             .foregroundColor(.gray)
                     }
                 }
 
                 Spacer()
 
-                // 价格 + 当日涨跌（加大间距和字体）
-                let changePct = stock.change_pct ?? 0
-                HStack(spacing: 6) {
-                    Text(String(format: "¥%.2f", stock.price ?? 0))
-                        .font(.headline)
+                // 价格 + 当日涨跌（实时价格优先）
+                HStack(spacing: 4) {
+                    Text(String(format: "¥%.2f", displayPrice))
+                        .font(.system(size: 13))
                         .foregroundColor(.white)
-                    Text(String(format: "%@%.1f%%", changePct >= 0 ? "+" : "", changePct))
-                        .font(.subheadline)
+                    Text(String(format: "%@%.1f%%", displayChangePct >= 0 ? "+" : "", displayChangePct))
+                        .font(.system(size: 12))
                         .fontWeight(.medium)
                 }
-                .foregroundColor(changePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                .foregroundColor(displayChangePct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
 
                 VStack(spacing: 4) {
                     // 退市风险警示（星星下面）
@@ -227,7 +240,7 @@ struct StockCard: View {
                     } label: {
                         Image(systemName: stockViewModel.isFavorited(stock.code) ? "star.fill" : "star")
                             .foregroundColor(stockViewModel.isFavorited(stock.code) ? Color(hex: "FFC107") : .gray)
-                            .font(.title3)
+                            .font(.system(size: 16))
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
@@ -251,7 +264,7 @@ struct StockCard: View {
                             .foregroundColor(.gray)
                     }
                     Spacer()
-                    if let surgeReason = stock.surge_reason, let changePct = stock.change_pct, changePct >= 5.0 {
+                    if let surgeReason = stock.surge_reason, displayChangePct >= 5.0 {
                         HStack(spacing: 2) {
                             Image(systemName: "flame.fill")
                                 .font(.system(size: 9))
@@ -276,70 +289,81 @@ struct StockCard: View {
                 // 5年涨跌
                 VStack(spacing: 0) {
                     Text(String(format: "%.0f%%", stock.change_5y ?? 0))
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor((stock.change_5y ?? 0) >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
                     Text("5年")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
                 // 位置
                 VStack(spacing: 0) {
                     Text(stock.price_position.map { "\(Int($0 * 100))" } ?? "-")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(colorForPosition(stock.price_position))
                     Text("位置")
                         .font(.system(size: 9))
                         .foregroundColor(.gray)
                 }
 
+                // PE分位
+                VStack(spacing: 0) {
+                    Text(stock.pe_percentile.map { "\(Int($0))" } ?? "-")
+                        .font(.system(size: 10))
+                        .foregroundColor(colorForPE(stock.pe_percentile))
+                    Text("PE")
+                        .font(.system(size: 8))
+                        .foregroundColor(.gray)
+                }
+
                 // 评分
                 VStack(spacing: 0) {
-                    Text(calculateScore())
-                        .font(.system(size: 11))
-                        .foregroundColor(colorForScore(calculateScore()))
+                    let scoreText = calculateScore()
+                    Text(scoreText)
+                        .font(.system(size: 10))
+                        .foregroundColor(colorForScore(scoreText))
                     Text("评分")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
                 // 筹码
                 VStack(spacing: 0) {
                     Text(stock.chip_concentration.map { String(format: "%.0f", $0 * 100) } ?? "-")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(colorForChip(stock.chip_concentration))
                     Text("筹码")
-                        .font(.system(size: 9))
-                        .foregroundColor(.gray)
-                }
-
-                // 股东
-                VStack(spacing: 0) {
-                    Text(shareholderTrendValue())
-                        .font(.system(size: 11))
-                        .foregroundColor(colorForShareholder(shareholderTrendValue()))
-                    Text("股东")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
                 // 背离
                 VStack(spacing: 0) {
                     Text(divergenceDots())
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(colorForDivergence())
                     Text("背")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
                 // 财务数据: ROE
                 VStack(spacing: 0) {
                     Text(stock.roe ?? "-")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(colorForROE())
                     Text("ROE")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
+                        .foregroundColor(.gray)
+                }
+
+                // 股东趋势
+                VStack(spacing: 0) {
+                    Text(shareholderArrow())
+                        .font(.system(size: 11))
+                        .foregroundColor(colorForShareholderArrow())
+                    Text("股东")
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
@@ -349,7 +373,7 @@ struct StockCard: View {
                         .font(.system(size: 10))
                         .foregroundColor(colorForYoy())
                     Text("同比")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
@@ -359,7 +383,7 @@ struct StockCard: View {
                         .font(.system(size: 10))
                         .foregroundColor(colorForQoq())
                     Text("环比")
-                        .font(.system(size: 9))
+                        .font(.system(size: 8))
                         .foregroundColor(.gray)
                 }
 
@@ -367,10 +391,10 @@ struct StockCard: View {
                 if let returnPct = stockViewModel.calculateFavoriteReturn(stock.code) {
                     VStack(spacing: 0) {
                         Text(String(format: "%@%.1f%%", returnPct >= 0 ? "+" : "", returnPct))
-                            .font(.system(size: 11, weight: .bold))
+                            .font(.system(size: 10, weight: .bold))
                             .foregroundColor(returnPct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
                         Text("自选")
-                            .font(.system(size: 9))
+                            .font(.system(size: 8))
                             .foregroundColor(.gray)
                     }
                 }
@@ -419,84 +443,9 @@ struct StockCard: View {
 
     // 退市风险预警（2025年退市新规）
     // *ST: 净利润为负+营收不达标 或 净资产为负
-    // 警示: 净利润为负、股价<1元、ROE为负
+    // 警示: 使用 ViewModel 缓存的退市风险等级，避免逐行重复计算
     func riskLevel() -> (level: String, detail: String) {
-        let code = stock.code
-
-        let profitNegative: Bool = {
-            guard let yoy = stock.net_profit_yoy else { return false }
-            let clean = yoy.replacingOccurrences(of: "%", with: "").replacingOccurrences(of: "+", with: "")
-            guard let value = Double(clean) else { return false }
-            return value < 0
-        }()
-
-        // 营收转元（如 "2334.33亿" → 233433000000）
-        let revenueYuan: Double? = {
-            guard let rev = stock.revenue, !rev.isEmpty else { return nil }
-            let numStr = rev.replacingOccurrences(of: "亿", with: "").replacingOccurrences(of: "万", with: "").replacingOccurrences(of: "元", with: "")
-            guard let num = Double(numStr) else { return nil }
-            if rev.contains("万") { return num * 10000 }
-            if rev.contains("亿") { return num * 100000000 }
-            return num
-        }()
-
-        // 营收门槛（2025新规: 主板3亿/创业板1亿/科创板5000万）
-        let revenueThreshold: Double = {
-            if code.hasPrefix("68") { return 50_000_000 }
-            if code.hasPrefix("30") { return 100_000_000 }
-            return 300_000_000
-        }()
-
-        let bvNegative: Bool = {
-            guard let bv = stock.book_value_per_share else { return false }
-            return bv < 0
-        }()
-
-        let priceVal = stock.price ?? 0
-
-        // 财务造假风险
-        let fraudRisk = stock.financial_fraud_risk ?? 0
-        let embezzlementRisk = stock.fund_embezzlement_risk ?? 0
-        let otherReceivablesRatio = stock.other_receivables_ratio ?? 0
-
-        // *ST 退市风险警示
-        if fraudRisk >= 2 {
-            return ("*ST", "财务造假处罚")
-        }
-        if profitNegative, let rev = revenueYuan, rev < revenueThreshold {
-            return ("*ST", "净利负+营收不达标")
-        }
-        if bvNegative {
-            return ("*ST", "净资产为负")
-        }
-
-        // 警示
-        if fraudRisk >= 1 {
-            return ("警示", "有财务违规处罚")
-        }
-        if embezzlementRisk >= 1 {
-            return ("警示", "资金占用风险")
-        }
-        if otherReceivablesRatio > 30 {
-            return ("警示", "其他应收款占比>30%")
-        }
-        if profitNegative && priceVal < 1.0 && priceVal > 0 {
-            return ("警示", "净利负+股价<1元")
-        }
-        if priceVal < 1.0 && priceVal > 0 {
-            return ("警示", "股价<1元")
-        }
-        if profitNegative {
-            return ("警示", "净利润为负")
-        }
-        if let roeStr = stock.roe, let roeVal = Double(roeStr.replacingOccurrences(of: "%", with: "")), roeVal < 0 {
-            return ("警示", "ROE为负")
-        }
-        if let divCount = stock.dividend_count, divCount == 0 {
-            return ("警示", "从未分红")
-        }
-
-        return ("安全", "")
+        return stockViewModel.riskCache[stock.code] ?? stockViewModel.computeRiskLevel(stock)
     }
 
     func divergenceDots() -> String {
@@ -546,7 +495,7 @@ struct StockCard: View {
     }
 
     func calculateScore() -> String {
-        let total = stockViewModel.calculateScore(stock)
+        let total = stockViewModel.scoreCache[stock.code] ?? stockViewModel.calculateScore(stock)
         return String(format: "%.0f", total * 100)
     }
 
@@ -556,6 +505,25 @@ struct StockCard: View {
 
     func shareholderChangePercent() -> Double {
         return stockViewModel.shareholderChangePercent(stock)
+    }
+
+    func shareholderArrow() -> String {
+        guard let trend = stock.holders_trend, trend.count >= 2 else { return "-" }
+        let validTrend = trend.filter { ($0.holders ?? 0) >= 1000 }
+        guard validTrend.count >= 2 else { return "-" }
+        let oldest = validTrend.first?.holders ?? 0
+        let newest = validTrend.last?.holders ?? 0
+        guard oldest > 0 else { return "-" }
+        let pct = Double(newest - oldest) / Double(oldest) * 100
+        if pct > 0 { return "↑" }
+        else { return "↓" }
+    }
+
+    func colorForShareholderArrow() -> Color {
+        let arrow = shareholderArrow()
+        if arrow == "↑" { return Color(hex: "F44336") }
+        if arrow == "↓" { return Color(hex: "4CAF50") }
+        return .gray
     }
 
     func shareholderTrendValue() -> String {
@@ -568,6 +536,14 @@ struct StockCard: View {
         let pct = Double(newest - oldest) / Double(oldest) * 100
         if pct > 0 { return "+\(String(format: "%.0f", pct))%" }
         else { return "\(String(format: "%.0f", pct))%" }
+    }
+
+    func colorForPE(_ percentile: Double?) -> Color {
+        guard let pct = percentile else { return .gray }
+        if pct < 20 { return Color(hex: "4CAF50") }
+        else if pct < 50 { return Color(hex: "1E88E5") }
+        else if pct < 80 { return Color(hex: "FFC107") }
+        else { return Color(hex: "F44336") }
     }
 
     func conceptColor(_ index: Int) -> String {

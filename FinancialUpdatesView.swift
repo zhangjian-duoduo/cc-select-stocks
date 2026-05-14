@@ -155,16 +155,21 @@ struct FinancialUpdatesView: View {
                         dateList.append(item.date)
                         monthDataDict[item.date] = item.count
                     }
+                    let now = Date()
+                    let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
+                    let dateToSelect: String
+                    if dateList.contains(today) {
+                        dateToSelect = today
+                    } else if let first = dateList.first {
+                        dateToSelect = first
+                    } else {
+                        return
+                    }
                     await MainActor.run {
                         monthData = monthDataDict
-                        let now = Date()
-                        let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
-                        if dateList.contains(today) {
-                            selectedDate = today
-                        } else if let first = dateList.first {
-                            selectedDate = first
-                        }
+                        selectedDate = dateToSelect
                     }
+                    loadUpdatesForDate(date: dateToSelect)
                 }
             } catch {
                 print("加载月份数据失败: \(error)")

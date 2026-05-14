@@ -1,5 +1,10 @@
 import Foundation
 
+enum SelectionType: String, CaseIterable {
+    case standard = "智能选股"
+    case newRule = "新规"
+}
+
 // 多自选股列表模型
 struct Watchlist: Codable, Identifiable, Equatable {
     var id: String = UUID().uuidString
@@ -35,6 +40,8 @@ struct Stock: Identifiable, Codable {
     var holders_trend: [HolderData]?
     var change_5y: Double?
     var price_percentile: Double?
+    var pe_ttm: Double?
+    var pe_percentile: Double?
     var chip_concentration: Double?
     var macd_divergence: MACDDivergence?
     var trend_analysis: TrendAnalysis?
@@ -57,6 +64,9 @@ struct Stock: Identifiable, Codable {
     var other_receivables_ratio: Double?  // 其他应收款/总资产(%)
     var fund_embezzlement_risk: Double?   // 资金占用风险 1=高风险
     var financial_fraud_risk: Double?     // 财务造假风险 1=有处罚 2=有造假相关处罚
+    var debt_ratio: Double?              // 资产负债率(%)
+    var operating_cash_flow: Double?     // 经营性现金流
+    var rd_ratio: Double?                // 研发费用率(%)
 
     // 概念板块
     var concepts: [String]?       // 所属概念板块列表
@@ -104,12 +114,13 @@ struct Stock: Identifiable, Codable {
     // 处理可能为字符串的数值字段
     enum CodingKeys: String, CodingKey {
         case code, name, price, change_pct, selected_at
-        case holders_trend, change_5y, price_percentile, chip_concentration
+        case holders_trend, change_5y, price_percentile, pe_ttm, pe_percentile, chip_concentration
         case macd_divergence, trend_analysis, price_position, kline
         case kline_daily, kline_weekly, kline_monthly
         case net_profit_yoy, net_profit_qoq, roe, sector, revenue, book_value_per_share
         case financial_updated_at, total_market_cap, dividend_count
         case other_receivables_ratio, fund_embezzlement_risk, financial_fraud_risk
+        case debt_ratio, operating_cash_flow, rd_ratio
         case concepts, surge_reason, surge_concept
     }
 
@@ -124,6 +135,8 @@ struct Stock: Identifiable, Codable {
         change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
         change_5y = try Self.decodeNumeric(container: container, key: .change_5y)
         price_percentile = try Self.decodeNumeric(container: container, key: .price_percentile)
+        pe_ttm = try Self.decodeNumeric(container: container, key: .pe_ttm)
+        pe_percentile = try Self.decodeNumeric(container: container, key: .pe_percentile)
         chip_concentration = try Self.decodeNumeric(container: container, key: .chip_concentration)
         price_position = try Self.decodeNumeric(container: container, key: .price_position)
         book_value_per_share = try Self.decodeNumeric(container: container, key: .book_value_per_share)
@@ -149,6 +162,10 @@ struct Stock: Identifiable, Codable {
         other_receivables_ratio = try Self.decodeNumeric(container: container, key: .other_receivables_ratio)
         fund_embezzlement_risk = try Self.decodeNumeric(container: container, key: .fund_embezzlement_risk)
         financial_fraud_risk = try Self.decodeNumeric(container: container, key: .financial_fraud_risk)
+        debt_ratio = try Self.decodeNumeric(container: container, key: .debt_ratio)
+        operating_cash_flow = try Self.decodeNumeric(container: container, key: .operating_cash_flow)
+        rd_ratio = try Self.decodeNumeric(container: container, key: .rd_ratio)
+        financial_updated_at = try container.decodeIfPresent(String.self, forKey: .financial_updated_at)
 
         concepts = try container.decodeIfPresent([String].self, forKey: .concepts)
         surge_reason = try container.decodeIfPresent(String.self, forKey: .surge_reason)
@@ -173,6 +190,48 @@ struct StockResponse: Codable {
     let total: Int?
 }
 
+// 动态选股筛选响应
+struct ScreeningResponse: Codable {
+    let code: Int
+    let data: [Stock]?
+    let message: String?
+    let total: Int?
+    let stats: ScreeningStats?
+}
+
+struct ScreeningStats: Codable {
+    let total_scanned: Int?
+}
+
+// 筛选条件模型（UI 使用）
+struct ScreeningCondition: Identifiable {
+    let id: String          // API 字段名
+    let title: String
+    let subtitle: String
+    let section: ScreeningSection
+}
+
+enum ScreeningSection: String, CaseIterable {
+    case safety = "安全过滤"
+    case financial = "核心成长创新"
+    case industry = "行业属性"
+}
+
+extension ScreeningCondition {
+    static let all: [ScreeningCondition] = [
+        .init(id: "listed_over_180d", title: "上市 > 180天", subtitle: "股票上市交易超过6个月", section: .safety),
+        .init(id: "not_st", title: "非 ST", subtitle: "排除ST、*ST等风险警示股票", section: .safety),
+        .init(id: "revenue_over_5yi", title: "营收 ≥ 5亿", subtitle: "最近年报营业收入不低于5亿元", section: .financial),
+        .init(id: "revenue_yoy_over_25", title: "营收同比 ≥ 25%", subtitle: "最新报告期营收同比增长不低于25%", section: .financial),
+        .init(id: "rd_ratio_over_10", title: "研发费用率 ≥ 10%", subtitle: "研发费用占营业收入比例不低于10%", section: .financial),
+        .init(id: "rev_cagr_over_30", title: "营收3年CAGR ≥ 30%", subtitle: "近三年营收复合增长率不低于30%", section: .financial),
+        .init(id: "debt_ratio_under_60", title: "资产负债率 ≤ 60%", subtitle: "资产负债率不超过60%", section: .financial),
+        .init(id: "operating_cashflow_positive", title: "经营性现金流 > 0", subtitle: "最新报告期经营性现金流为正", section: .financial),
+        .init(id: "inst_ownership_over_5", title: "机构持股 ≥ 5%", subtitle: "机构持股比例不低于5%", section: .financial),
+        .init(id: "emerging_concept", title: "新兴产业概念", subtitle: "属于AI、机器人、新能源、半导体、军工等新兴产业", section: .industry),
+    ]
+}
+
 struct EmptyResponse: Codable {
     let code: Int?
     let message: String?
@@ -182,6 +241,21 @@ struct BatchStockResponse: Codable {
     let code: Int
     let data: [String: Stock]?
     let message: String?
+}
+
+struct PriceInfo: Codable {
+    let price: Double?
+    let change_pct: Double?
+}
+
+struct LivePrice {
+    let price: Double
+    let changePct: Double?
+}
+
+struct PriceResponse: Codable {
+    let code: Int
+    let data: [String: PriceInfo]?
 }
 
 struct FinancialHistoryResponse: Codable {
@@ -231,7 +305,7 @@ struct Position: Codable, Identifiable {
 
     // 计算实时盈亏（需要传入当前价格）
     func realTimePositionReturn(_ currentPrice: Double) -> Double {
-        guard currentPrice > 0, quantity > 0 else { return 0 }
+        guard currentPrice > 0, quantity > 0, avgCost > 0 else { return 0 }
         return (currentPrice - avgCost) * Double(quantity)
     }
 
@@ -240,7 +314,7 @@ struct Position: Codable, Identifiable {
     }
 
     var positionReturn: Double {
-        guard currentPrice > 0, quantity > 0 else { return 0 }
+        guard currentPrice > 0, quantity > 0, avgCost > 0 else { return 0 }
         return (currentPrice - avgCost) * Double(quantity)
     }
 

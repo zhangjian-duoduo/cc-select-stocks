@@ -8,73 +8,115 @@ struct SellSheetView: View {
     @EnvironmentObject var stockViewModel: StockViewModel
     @State private var errorMessage: String?
 
-    // 获取最新价格
     private var currentPrice: Double {
-        stockViewModel.allStocks.first(where: { $0.code == position.code })?.price ?? position.currentPrice
+        stockViewModel.latestPrice(for: position.code) ?? position.currentPrice
     }
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 20) {
+            VStack(spacing: 12) {
                 // 股票信息
-                VStack(spacing: 4) {
-                    Text(position.name)
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.white)
-                    Text(position.code)
-                        .foregroundColor(.gray)
-                    if currentPrice > 0 {
-                        Text("当前价格: ¥\(String(format: "%.2f", currentPrice))")
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(position.name)
+                            .font(.headline)
+                            .foregroundColor(.white)
+                        Text(position.code)
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                    }
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("持仓 \(position.quantity)股")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Text("¥\(String(format: "%.2f", currentPrice))")
                             .font(.headline)
                             .foregroundColor(.white)
                     }
                 }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(hex: "1E1E1E"))
-                .cornerRadius(12)
+                .padding(12)
+                .background(Color(hex: "2C2C2C"))
+                .cornerRadius(8)
 
-                // 持仓信息
-                VStack(spacing: 4) {
-                    Text("当前持仓")
-                        .font(.subheadline)
-                        .foregroundColor(.gray)
-                    HStack {
-                        Text("\(position.quantity)股")
-                            .foregroundColor(.white)
-                        Text("成本: ¥\(String(format: "%.2f", position.avgCost))")
-                            .foregroundColor(.gray)
-                        let rtn = position.realTimeReturnPct(currentPrice)
-                        Text("盈亏: \(String(format: "%@%.1f%%", rtn >= 0 ? "+" : "", rtn))")
-                            .foregroundColor(rtn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                    }
-                    .font(.headline)
-                }
-                .padding()
-                .frame(maxWidth: .infinity)
-                .background(Color(hex: "1E1E1E"))
-                .cornerRadius(12)
-
-                // 全卖按钮
+                // 卖出数量
                 VStack(spacing: 8) {
-                    Text("卖出数量(股):")
+                    Text("卖出数量（股）")
+                        .font(.caption)
                         .foregroundColor(.gray)
-                    TextField("100", text: $quantity)
-                        .keyboardType(.numberPad)
-                        .textFieldStyle(.plain)
-                        .foregroundColor(.white)
+
+                    HStack(spacing: 12) {
+                        Button {
+                            if let q = Int(quantity), q > 100 {
+                                quantity = String(q - 100)
+                            }
+                        } label: {
+                            Image(systemName: "minus.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.gray)
+                        }
+
+                        TextField("100", text: $quantity)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.center)
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundColor(.white)
+                            .frame(width: 100)
+
+                        Button {
+                            let q = Int(quantity) ?? 0
+                            quantity = String(min(q + 100, position.quantity))
+                        } label: {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title3)
+                                .foregroundColor(.gray)
+                        }
+                    }
+                    .padding(.vertical, 4)
+
+                    // 快捷选择
+                    HStack(spacing: 8) {
+                        ForEach([("100", 100), ("1/2", position.quantity / 2), ("全部", position.quantity)], id: \.0) { label, raw in
+                            let v = max(100, (raw / 100) * 100)
+                            Button {
+                                quantity = String(v)
+                            } label: {
+                                Text(label)
+                                    .font(.caption)
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 14)
+                                    .padding(.vertical, 5)
+                                    .background(quantity == String(v) ? Color(hex: "1E88E5") : Color(hex: "3A3A3A"))
+                                    .cornerRadius(4)
+                            }
+                        }
+                    }
                 }
-                .padding()
-                .background(Color(hex: "1E1E1E"))
+                .padding(12)
+                .background(Color(hex: "2C2C2C"))
                 .cornerRadius(8)
 
                 if let error = errorMessage {
                     Text(error)
                         .font(.caption)
                         .foregroundColor(Color(hex: "FF9800"))
-                        .padding(.horizontal)
                 }
+
+                // 预计回收
+                HStack {
+                    Text("预计回收")
+                        .font(.subheadline)
+                        .foregroundColor(.gray)
+                    Spacer()
+                    let qty = Int(quantity) ?? 0
+                    Text("¥\(String(format: "%.2f", currentPrice * Double(min(qty, position.quantity))))")
+                        .font(.title3)
+                        .fontWeight(.bold)
+                        .foregroundColor(Color(hex: "4CAF50"))
+                }
+                .padding(12)
+                .background(Color(hex: "2C2C2C"))
+                .cornerRadius(8)
 
                 Button {
                     errorMessage = nil
@@ -106,55 +148,13 @@ struct SellSheetView: View {
                         .font(.headline)
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .padding()
+                        .padding(12)
                         .background(Color(hex: "F44336"))
-                        .cornerRadius(12)
+                        .cornerRadius(8)
                 }
-
-                // 快速卖出选项
-                HStack(spacing: 12) {
-                    Button {
-                        quantity = "100"
-                    } label: {
-                        Text("100")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "1E1E1E"))
-                            .cornerRadius(6)
-                    }
-
-                    Button {
-                        let half = (position.quantity / 2) / 100 * 100
-                        if half >= 100 { quantity = String(half) }
-                    } label: {
-                        Text("1/2")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "1E1E1E"))
-                            .cornerRadius(6)
-                    }
-
-                    Button {
-                        quantity = String(position.quantity)
-                    } label: {
-                        Text("全部")
-                            .font(.caption)
-                            .foregroundColor(.white)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color(hex: "1E1E1E"))
-                            .cornerRadius(6)
-                    }
-                }
-
-                Spacer()
             }
-            .padding()
-            .background(Color(hex: "121212"))
+            .padding(16)
+            .background(Color(hex: "1E1E1E"))
             .navigationTitle("卖出")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -163,6 +163,9 @@ struct SellSheetView: View {
                         isPresented = false
                     }
                 }
+            }
+            .onAppear {
+                quantity = ""
             }
         }
     }

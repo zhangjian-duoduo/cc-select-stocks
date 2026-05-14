@@ -8,6 +8,30 @@ struct RemovedStock: Identifiable, Codable {
     let price: Double?
     let change_pct: Double?
     let removed_at: String?
+
+    enum CodingKeys: String, CodingKey {
+        case code, name, sector, price, change_pct, removed_at
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decode(String.self, forKey: .code)
+        name = try container.decode(String.self, forKey: .name)
+        sector = try container.decodeIfPresent(String.self, forKey: .sector)
+        price = try Self.decodeNumeric(container: container, key: .price)
+        change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
+        removed_at = try container.decodeIfPresent(String.self, forKey: .removed_at)
+    }
+
+    private static func decodeNumeric(container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> Double? {
+        if let doubleValue = try? container.decode(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
+            return doubleValue
+        }
+        return nil
+    }
 }
 
 struct RemovedResponse: Codable {
@@ -127,8 +151,16 @@ struct RemovedView: View {
                 }
             } catch let error as APIClient.APIError {
                 errorMessage = error.errorDescription
+                print("[RemovedView] API错误: \(error)")
+                if case .decodingError(let de) = error {
+                    print("[RemovedView] 原始解码错误(RemovedResponse): \(de)")
+                }
+            } catch let error as DecodingError {
+                errorMessage = "数据解析失败"
+                print("[RemovedView] 解码错误(RemovedResponse): \(error)")
             } catch {
                 errorMessage = error.localizedDescription
+                print("[RemovedView] 其他错误: \(error)")
             }
             isLoading = false
         }

@@ -20,16 +20,20 @@ DB_CONFIG = {
 def get_db():
     return pymysql.connect(**DB_CONFIG)
 
-def update_financial_data():
-    """从akshare获取财务数据并更新到数据库"""
+def update_financial_data(codes=None):
+    """从akshare获取财务数据并更新到数据库。
+    codes: 要更新的股票代码列表，为None则更新所有stocks表中的股票"""
     conn = get_db()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
-        # 获取所有股票代码
-        cursor.execute("SELECT code FROM stocks")
-        stocks = cursor.fetchall()
-        print(f"共 {len(stocks)} 只股票需要更新财务数据")
+        if codes:
+            stocks = [{'code': c} for c in codes]
+            print(f"增量更新 {len(stocks)} 只有财报更新的股票")
+        else:
+            cursor.execute("SELECT code FROM stocks")
+            stocks = cursor.fetchall()
+            print(f"共 {len(stocks)} 只股票需要更新财务数据")
 
         updated = 0
         for i, stock in enumerate(stocks):

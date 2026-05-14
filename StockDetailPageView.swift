@@ -296,6 +296,12 @@ struct StockDetailContent: View {
                     价格分位View(pricePct: pricePct)
                 }
 
+                // PE分析
+                if let peTTM = detailedStock?.pe_ttm ?? stock.pe_ttm,
+                   let pePct = detailedStock?.pe_percentile ?? stock.pe_percentile {
+                    PE百分位View(peTTM: peTTM, pePct: pePct)
+                }
+
                 // 趋势分析
                 if let trend = stock.trend_analysis {
                     趋势分析View(trend: trend)
@@ -929,6 +935,54 @@ struct StockDetailContent: View {
         .padding()
         .background(Color(hex: "1E1E1E"))
         .cornerRadius(12)
+    }
+
+    @ViewBuilder
+    func PE百分位View(peTTM: Double, pePct: Double) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PE 估值分析")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            HStack {
+                Gauge(value: pePct, in: 0...100) {
+                    Text("PE分位")
+                } currentValueLabel: {
+                    Text("\(Int(pePct))%")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                }
+                .gaugeStyle(.accessoryCircular)
+                .tint(valuationColor(pePct))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text("PE-TTM")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Text(String(format: "%.2f", peTTM))
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                    }
+                    Text(pePositionDescription(pePct))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+                .padding(.leading)
+            }
+        }
+        .padding()
+        .background(Color(hex: "1E1E1E"))
+        .cornerRadius(12)
+    }
+
+    func pePositionDescription(_ percentile: Double) -> String {
+        if percentile < 20 { return "PE处历史低位，估值偏低" }
+        else if percentile < 40 { return "PE偏低，估值合理偏低" }
+        else if percentile < 60 { return "PE处历史中位，估值合理" }
+        else if percentile < 80 { return "PE偏高，估值偏贵" }
+        else { return "PE处历史高位，估值过高" }
     }
 
     @ViewBuilder

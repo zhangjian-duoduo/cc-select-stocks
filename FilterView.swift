@@ -36,7 +36,30 @@ struct FilterView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                Text("选择筛选条件")
+                // 自定义筛选入口
+                NavigationLink(destination: DynamicScreeningView()) {
+                    HStack {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.title3)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("自定义筛选")
+                                .font(.headline)
+                                .foregroundColor(.white)
+                            Text("每个条件可独立开关，灵活组合")
+                                .font(.caption)
+                                .foregroundColor(Color(hex: "90CAF9"))
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.gray)
+                    }
+                    .padding()
+                    .background(Color(hex: "1E1E1E"))
+                    .cornerRadius(12)
+                }
+                .padding(.horizontal)
+
+                Text("预设筛选条件")
                     .font(.headline)
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity, alignment: .leading)
