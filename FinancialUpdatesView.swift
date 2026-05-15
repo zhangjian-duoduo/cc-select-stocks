@@ -15,6 +15,7 @@ struct FinancialUpdatesView: View {
     @State private var displayedDate: Date = Date()
     @State private var selectedStockIndex: Int = 0
     @State private var showDetailPage = false
+    @State private var errorMessage: String?
 
     private let calendar = Calendar.current
 
@@ -43,7 +44,7 @@ struct FinancialUpdatesView: View {
                 dateData: monthData,
                 accentColor: Color(hex: "FFC107"),
                 canGoNext: canGoNext,
-                onMonthChanged: { loadMonthData(month: $0) },
+                onMonthChanged: { month in Task { await loadMonthData(month: month) } },
                 onDateSelected: { loadUpdatesForDate(date: $0) }
             )
 
@@ -91,6 +92,18 @@ struct FinancialUpdatesView: View {
             }
             .padding()
             .background(Color(hex: "1E1E1E"))
+
+            if let error = errorMessage {
+                HStack {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                .padding(.horizontal)
+                .padding(.top, 8)
+            }
 
             // 股票列表
             if stockViewModel.isLoadingFinancialUpdates {
@@ -140,46 +153,53 @@ struct FinancialUpdatesView: View {
             }
         }
         .onAppear {
-            loadMonthData(month: currentYearMonth)
+            Task { await loadMonthData(month: currentYearMonth) }
+        }
+        .refreshable {
+            await loadMonthData(month: currentYearMonth)
         }
     }
 
-    private func loadMonthData(month: String) {
-        Task {
-            do {
-                let result: MonthFinancialResponse = try await APIClient.get("/financial_updates/month/\(month)")
-                if result.code == 0, let data = result.data {
-                    var monthDataDict: [String: Int] = [:]
-                    var dateList: [String] = []
-                    for item in data.dates {
-                        dateList.append(item.date)
-                        monthDataDict[item.date] = item.count
-                    }
-                    let now = Date()
-                    let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
-                    let dateToSelect: String
-                    if dateList.contains(today) {
-                        dateToSelect = today
-                    } else if let first = dateList.first {
-                        dateToSelect = first
-                    } else {
-                        return
-                    }
-                    await MainActor.run {
-                        monthData = monthDataDict
-                        selectedDate = dateToSelect
-                    }
-                    loadUpdatesForDate(date: dateToSelect)
+    private func loadMonthData(month: String) async {
+        errorMessage = nil
+        do {
+            let result: MonthFinancialResponse = try await APIClient.get("/financial_updates/month/\(month)")
+            if result.code == 0, let data = result.data {
+                var monthDataDict: [String: Int] = [:]
+                var dateList: [String] = []
+                for item in data.dates {
+                    dateList.append(item.date)
+                    monthDataDict[item.date] = item.count
                 }
-            } catch {
-                print("加载月份数据失败: \(error)")
+                let now = Date()
+                let today = String(format: "%04d-%02d-%02d", calendar.component(.year, from: now), calendar.component(.month, from: now), calendar.component(.day, from: now))
+                let dateToSelect: String
+                if dateList.contains(today) {
+                    dateToSelect = today
+                } else if let first = dateList.first {
+                    dateToSelect = first
+                } else {
+                    return
+                }
+                monthData = monthDataDict
+                selectedDate = dateToSelect
+                loadUpdatesForDate(date: dateToSelect)
+            } else {
+                errorMessage = "加载失败"
             }
+        } catch let error as APIClient.APIError {
+            errorMessage = error.errorDescription
+            print("[FinancialUpdates] API错误(month): \(error)")
+        } catch {
+            errorMessage = error.localizedDescription
+            print("[FinancialUpdates] 错误(month): \(error)")
         }
     }
 
     private func loadUpdatesForDate(date: String) {
         let sortBy = currentSort == .yoy ? "net_profit_yoy" : "net_profit_qoq"
         let order = sortAscending ? "asc" : "desc"
+        errorMessage = nil
 
         Task {
             do {
@@ -188,9 +208,15 @@ struct FinancialUpdatesView: View {
                     await MainActor.run {
                         stockViewModel.financialUpdateStocks = resultData.stocks ?? []
                     }
+                } else {
+                    await MainActor.run { errorMessage = "加载失败" }
                 }
+            } catch let error as APIClient.APIError {
+                await MainActor.run { errorMessage = error.errorDescription }
+                print("[FinancialUpdates] API错误(date): \(error)")
             } catch {
-                print("加载失败: \(error)")
+                await MainActor.run { errorMessage = error.localizedDescription }
+                print("[FinancialUpdates] 错误(date): \(error)")
             }
         }
     }
@@ -198,6 +224,7 @@ struct FinancialUpdatesView: View {
     private func reloadWithSort() {
         let sortBy = currentSort == .yoy ? "net_profit_yoy" : "net_profit_qoq"
         let order = sortAscending ? "asc" : "desc"
+        errorMessage = nil
 
         if selectedDate.isEmpty {
             Task {
@@ -207,9 +234,15 @@ struct FinancialUpdatesView: View {
                         await MainActor.run {
                             stockViewModel.financialUpdateStocks = resultData.stocks ?? []
                         }
+                    } else {
+                        await MainActor.run { errorMessage = "刷新失败" }
                     }
+                } catch let error as APIClient.APIError {
+                    await MainActor.run { errorMessage = error.errorDescription }
+                    print("[FinancialUpdates] API错误(refresh): \(error)")
                 } catch {
-                    print("刷新失败: \(error)")
+                    await MainActor.run { errorMessage = error.localizedDescription }
+                    print("[FinancialUpdates] 错误(refresh): \(error)")
                 }
             }
         } else {

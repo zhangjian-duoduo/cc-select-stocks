@@ -32,6 +32,7 @@ struct FilterView: View {
     @State private var activeFilters: Set<String> = []
     @State private var isLoading = false
     @State private var filteredCount: Int? = nil
+    @State private var errorMessage: String?
 
     var body: some View {
         ScrollView {
@@ -113,6 +114,19 @@ struct FilterView: View {
                 }
                 .padding(.horizontal)
 
+                // 错误显示
+                if let error = errorMessage {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                    }
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+                }
+
                 // 结果显示
                 if let count = filteredCount {
                     if count > 0 {
@@ -161,6 +175,7 @@ struct FilterView: View {
         }
 
         isLoading = true
+        errorMessage = nil
         let filters = Array(activeFilters)
 
         Task { @MainActor in
@@ -171,9 +186,15 @@ struct FilterView: View {
                     stockViewModel.stocks = filtered
                     stockViewModel.applySort()
                     stockViewModel.saveFiltersDirectly(activeFilters)
+                } else {
+                    errorMessage = result.message ?? "筛选失败"
                 }
+            } catch let error as APIClient.APIError {
+                errorMessage = error.errorDescription
+                print("[FilterView] API错误: \(error)")
             } catch {
-                print("[筛选] 失败: \(error)")
+                errorMessage = error.localizedDescription
+                print("[FilterView] 错误: \(error)")
             }
             isLoading = false
         }

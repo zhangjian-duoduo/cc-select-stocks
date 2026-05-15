@@ -2,25 +2,6 @@ import Foundation
 import Combine
 import SwiftUI
 
-struct AppConfig {
-    static let baseURL = "http://8.163.91.16:5000/api/v1"
-}
-
-enum SortOption: String, CaseIterable {
-    case change5Y = "5年"
-    case position = "位置"
-    case pe = "PE"
-    case score = "评分"
-    case chip = "筹码"
-    case shareholder = "股东"
-    case dailyChange = "涨跌"
-    case bottomDivergence = "底背离"
-    case yoy = "同比"
-    case qoq = "环比"
-    case roe = "ROE"
-    case added = "添加时间"
-}
-
 class StockViewModel: ObservableObject {
     @Published var stocks: [Stock] = []
     @Published var filteredStocks: [Stock] = []
@@ -30,8 +11,10 @@ class StockViewModel: ObservableObject {
             if scoreCache.count != allStocks.count || oldValue.first?.price != allStocks.first?.price {
                 precomputeDerivedData()
             }
+            allStocksDict = Dictionary(grouping: allStocks, by: { $0.code }).compactMapValues(\.first)
         }
     }
+    private(set) var allStocksDict: [String: Stock] = [:]  // O(1) 查找
     @Published var financialUpdateStocks: [Stock] = []  // 今日财务数据更新的股票
     @Published var isLoading = false
     @Published var isLoadingFinancialUpdates = false
@@ -42,6 +25,7 @@ class StockViewModel: ObservableObject {
     private var priceTimer: Timer?
     private var isPollingPrices = false
     private var pollingTask: Task<Void, Never>?
+    private var pollingGeneration = 0
 
     // 自定义动态筛选
     @Published var screeningResults: [Stock] = []
@@ -191,10 +175,18 @@ class StockViewModel: ObservableObject {
 
         startPricePolling()
 
+        // App 从后台回到前台时立刻刷新价格
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.refreshLivePrices()
+            self?.updatePositionPrices()
+        }
+
         Task { [weak self] in
             await self?.loadData()
             await self?.updatePrices()
             await self?.loadFinancialUpdates()
+            // updatePrices 完成后立刻拉一次实时价格，不用等 timer
+            self?.refreshLivePrices()
         }
     }
 
@@ -238,7 +230,7 @@ class StockViewModel: ObservableObject {
     func refreshFavoriteStockData() {
         let allFavoritedCodes = Set(watchlists.flatMap { $0.stockCodes })
         for code in allFavoritedCodes {
-            if let stock = allStocks.first(where: { $0.code == code }),
+            if let stock = allStocksDict[code],
                let price = stock.price {
                 favoriteStockData[code] = CachedStockData(name: stock.name, price: price)
                 watchlistStockCache[code] = stock
@@ -348,7 +340,7 @@ class StockViewModel: ObservableObject {
         if favoriteDates[code] == nil {
             favoriteDates[code] = Date()
         }
-        if let stock = allStocks.first(where: { $0.code == code }),
+        if let stock = allStocksDict[code],
            let price = stock.price {
             favoriteEntryPrices[code] = price
             favoriteStockData[code] = CachedStockData(name: stock.name, price: price)
@@ -419,8 +411,11 @@ class StockViewModel: ObservableObject {
     }
 
     func savePositions() {
-        if let data = try? JSONEncoder().encode(positions) {
-            UserDefaults.standard.set(data, forKey: positionsKey)
+        let saved = positions
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(saved) {
+                UserDefaults.standard.set(data, forKey: self.positionsKey)
+            }
         }
     }
 
@@ -432,8 +427,11 @@ class StockViewModel: ObservableObject {
     }
 
     func saveTrades() {
-        if let data = try? JSONEncoder().encode(trades) {
-            UserDefaults.standard.set(data, forKey: tradesKey)
+        let saved = trades
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(saved) {
+                UserDefaults.standard.set(data, forKey: self.tradesKey)
+            }
         }
     }
 
@@ -518,12 +516,12 @@ class StockViewModel: ObservableObject {
         }
     }
 
-    // 获取任意股票的最新价格（livePrices → allStocks → watchlistStockCache → favoriteStockData → favoriteEntryPrices）
+    // 获取任意股票的最新价格（livePrices → allStocksDict → watchlistStockCache → favoriteStockData → favoriteEntryPrices）
     func latestPrice(for code: String) -> Double? {
         if let live = livePrices[code] {
             return live.price
         }
-        if let price = allStocks.first(where: { $0.code == code })?.price {
+        if let price = allStocksDict[code]?.price {
             return price
         }
         if let price = watchlistStockCache[code]?.price {
@@ -540,7 +538,7 @@ class StockViewModel: ObservableObject {
         if let live = livePrices[code], let pct = live.changePct {
             return pct
         }
-        if let pct = allStocks.first(where: { $0.code == code })?.change_pct {
+        if let pct = allStocksDict[code]?.change_pct {
             return pct
         }
         return watchlistStockCache[code]?.change_pct
@@ -584,7 +582,13 @@ class StockViewModel: ObservableObject {
             }
         }
         positions = updated
-        savePositions()
+        // 持久化移到后台，避免主线程卡顿
+        let saved = updated
+        DispatchQueue.global(qos: .utility).async {
+            if let data = try? JSONEncoder().encode(saved) {
+                UserDefaults.standard.set(data, forKey: self.positionsKey)
+            }
+        }
         // 异步从服务端补全所有持仓价格（stock_kline兜底）
         Task { await refreshPositionPricesFromServer() }
     }
@@ -606,12 +610,18 @@ class StockViewModel: ObservableObject {
             }
 
             if !updates.isEmpty {
-                await MainActor.run { [weak self] in
-                    guard let self else { return }
+                let saved = await MainActor.run { [weak self] in
+                    guard let self else { return [String: Position]() }
                     for (code, price) in updates {
                         self.positions[code]?.currentPrice = price
                     }
-                    self.savePositions()
+                    return self.positions
+                }
+                // 持久化移到后台
+                DispatchQueue.global(qos: .utility).async {
+                    if let data = try? JSONEncoder().encode(saved) {
+                        UserDefaults.standard.set(data, forKey: self.positionsKey)
+                    }
                 }
             }
         } catch {
@@ -748,35 +758,43 @@ class StockViewModel: ObservableObject {
             return
         }
 
-        let allCodes = Array(codes)
+        // 用户关注的代码优先（自选 + 持仓），第一批就能刷新UI
+        let priorityCodes = Set(watchlists.flatMap { $0.stockCodes }).union(positions.keys)
+        let allCodes = Array(priorityCodes) + Array(codes.subtracting(priorityCodes))
         let batchSize = 80
         let batchCount = (allCodes.count + batchSize - 1) / batchSize
-        print("[轮询] 获取 \(allCodes.count) 只价格(分\(batchCount)批)")
+        print("[轮询] 获取 \(allCodes.count) 只价格(分\(batchCount)批, 优先\(priorityCodes.count)只)")
+        pollingGeneration += 1
+        let gen = pollingGeneration
         pollingTask = Task { [weak self] in
-            defer { self?.isPollingPrices = false }
+            defer {
+                if self?.pollingGeneration == gen {
+                    self?.isPollingPrices = false
+                }
+            }
 
-            var allUpdated: [String: LivePrice] = [:]
             for i in stride(from: 0, to: allCodes.count, by: batchSize) {
                 if Task.isCancelled { return }
                 let batch = Array(allCodes[i..<min(i + batchSize, allCodes.count)])
                 do {
                     let result: PriceResponse = try await APIClient.post("/stocks/prices", body: ["codes": batch], retries: 0, timeout: 10)
                     if result.code == 0, let data = result.data {
+                        var batchUpdate: [String: LivePrice] = [:]
                         for (code, info) in data {
                             if let price = info.price {
-                                allUpdated[code] = LivePrice(price: price, changePct: info.change_pct)
+                                batchUpdate[code] = LivePrice(price: price, changePct: info.change_pct)
+                            }
+                        }
+                        // 每批完成立刻更新，不等剩余批次
+                        if !batchUpdate.isEmpty {
+                            await MainActor.run { [weak self] in
+                                self?.livePrices.merge(batchUpdate) { _, new in new }
                             }
                         }
                     }
                 } catch {
                     print("[轮询] 批次失败: \(error.localizedDescription)")
                 }
-            }
-
-            guard !Task.isCancelled, !allUpdated.isEmpty else { return }
-            print("[轮询] 更新 \(allUpdated.count) 只价格")
-            await MainActor.run { [weak self] in
-                self?.livePrices.merge(allUpdated) { _, new in new }
             }
         }
     }
@@ -1287,7 +1305,6 @@ class StockViewModel: ObservableObject {
 
     var favoritedStocks: [Stock] {
         let codes = currentWatchlist?.stockCodes ?? []
-        let allStocksDict = Dictionary(grouping: allStocks, by: { $0.code }).compactMapValues(\.first)
         var seen = Set<String>()
         return codes.compactMap { code in
             guard seen.insert(code).inserted else { return nil }
@@ -1295,7 +1312,7 @@ class StockViewModel: ObservableObject {
                 if let live = livePrices[code] {
                     var copy = stock
                     copy.price = live.price
-                    copy.change_pct = live.changePct
+                    if let pct = live.changePct { copy.change_pct = pct }
                     return copy
                 }
                 return stock
@@ -1303,7 +1320,7 @@ class StockViewModel: ObservableObject {
             if var cached = watchlistStockCache[code] {
                 if let live = livePrices[code] {
                     cached.price = live.price
-                    cached.change_pct = live.changePct
+                    if let pct = live.changePct { cached.change_pct = pct }
                     return cached
                 }
                 return cached
@@ -1331,39 +1348,5 @@ class StockViewModel: ObservableObject {
             return watchlistSortAscending ? v1 < v2 : v1 > v2
         }
     }
-}
-
-// 财务更新API响应
-struct FinancialUpdatesResponse: Codable {
-    let code: Int
-    let data: FinancialUpdatesData?
-}
-
-struct FinancialUpdatesData: Codable {
-    let date: String?
-    let count: Int?
-    let stocks: [Stock]?
-}
-
-// 月份财务数据响应
-struct MonthFinancialResponse: Codable {
-    let code: Int
-    let data: MonthFinancialData?
-}
-
-struct MonthFinancialData: Codable {
-    let month: String?
-    let dates: [DateCountItem]
-}
-
-struct DateCountItem: Codable {
-    let date: String
-    let count: Int
-}
-
-// 自选股缓存数据，用于列表里没有该股票时做降级显示
-struct CachedStockData: Codable {
-    let name: String
-    let price: Double
 }
 

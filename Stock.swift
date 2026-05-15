@@ -173,13 +173,7 @@ struct Stock: Identifiable, Codable {
     }
 
     private static func decodeNumeric(container: KeyedDecodingContainer<Stock.CodingKeys>, key: CodingKeys) throws -> Double? {
-        if let doubleValue = try? container.decode(Double.self, forKey: key) {
-            return doubleValue
-        }
-        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
-            return doubleValue
-        }
-        return nil
+        try container.decodeNumeric(key: key)
     }
 }
 
@@ -325,6 +319,18 @@ struct Position: Codable, Identifiable {
 }
 
 // 手动解析API响应 - 支持数组和对象两种格式
+extension KeyedDecodingContainer {
+    func decodeNumeric(key: Key) throws -> Double? {
+        if let doubleValue = try? decode(Double.self, forKey: key) {
+            return doubleValue
+        }
+        if let stringValue = try? decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
+            return doubleValue
+        }
+        return nil
+    }
+}
+
 struct StockAPI {
     // 解析列表页响应（data是数组）
     static func parseListResponse(_ data: Data) -> [Stock] {

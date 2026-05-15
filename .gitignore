@@ -44,6 +44,9 @@ venv.bak/
 backup/
 *.sql
 
+# Secrets
+Secrets.xcconfig
+
 # Misc
 *.log
 *.tmp._*.swift

@@ -2272,6 +2272,121 @@ def update_prices():
         if conn:
             conn.close()
 
+@app.route('/api/v1/stocks/prices', methods=['POST'])
+@require_api_key
+def get_stocks_prices():
+    """获取股票实时价格 - iOS端轮询调用
+    请求体: {"codes": ["000001", "600000", ...]}
+    返回: {"code": 0, "data": {"000001": {"price": 12.34, "change_pct": 5.6}, ...}}
+    优先从腾讯接口获取实时数据，失败时回退到数据库
+    """
+    data = request.get_json() or {}
+    codes = data.get('codes', [])
+
+    if not codes:
+        return jsonify({'code': 1, 'message': '缺少codes参数'})
+
+    # 构建腾讯行情代码
+    qt_codes = []
+    for code in codes:
+        if code.startswith('6') or code.startswith('9'):
+            qt_codes.append(f'sh{code}')
+        else:
+            qt_codes.append(f'sz{code}')
+
+    # 尝试从腾讯获取实时数据
+    fresh_data = {}
+    try:
+        import urllib.request
+        import ssl
+
+        url = f'http://qt.gtimg.cn/q={",".join(qt_codes[:200])}'
+        context = ssl._create_unverified_context()
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        response = urllib.request.urlopen(req, timeout=8, context=context)
+        raw = response.read().decode('gb2312', errors='ignore')
+
+        for item in raw.split(';'):
+            if not item.strip():
+                continue
+            try:
+                parts = item.split('=')
+                if len(parts) < 2:
+                    continue
+                full_code = parts[0].split('_')[-1]
+                if full_code.startswith('sh'):
+                    stock_code = full_code[2:]
+                elif full_code.startswith('sz'):
+                    stock_code = full_code[2:]
+                else:
+                    continue
+
+                fields = parts[1].split('~')
+                if len(fields) > 32:
+                    current_price = float(fields[3]) if fields[3] else 0
+                    change_pct = float(fields[32]) if fields[32] else 0
+                    if current_price > 0:
+                        fresh_data[stock_code] = {
+                            'price': current_price,
+                            'change_pct': change_pct
+                        }
+            except Exception:
+                continue
+
+        # 异步更新数据库（不回滚主流程）
+        if fresh_data:
+            try:
+                conn = get_db()
+                cursor = conn.cursor()
+                for code, info in fresh_data.items():
+                    cursor.execute(
+                        "UPDATE stocks SET price = %s, change_pct = %s WHERE code = %s",
+                        (info['price'], info['change_pct'], code)
+                    )
+                conn.commit()
+                cursor.close()
+                conn.close()
+            except Exception as e:
+                logger.warning(f"更新价格到数据库失败: {e}")
+
+        if fresh_data:
+            return jsonify({'code': 0, 'data': fresh_data})
+    except Exception as e:
+        logger.warning(f"腾讯实时行情获取失败，回退数据库: {e}")
+
+    # 腾讯接口失败时回退到数据库
+    conn = None
+    cursor = None
+    try:
+        conn = get_db()
+        cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+        placeholders = ','.join(['%s'] * len(codes))
+        cursor.execute(f"""
+            SELECT code, price, change_pct FROM stocks
+            WHERE code IN ({placeholders})
+        """, codes)
+
+        rows = cursor.fetchall()
+
+        result = {}
+        for row in rows:
+            result[row['code']] = {
+                'price': float(row['price']) if row.get('price') else None,
+                'change_pct': float(row['change_pct']) if row.get('change_pct') else None
+            }
+
+        return jsonify({'code': 0, 'data': result})
+
+    except Exception as e:
+        logger.error(f"获取价格失败: {e}")
+        return jsonify({'code': 1, 'message': str(e)})
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 @app.route('/api/v1/refresh_analysis_scheduled', methods=['POST'])
 @require_api_key
 def refresh_analysis_scheduled():

@@ -44,6 +44,12 @@ struct PortfolioView: View {
         }
     }
 
+    @State private var displayData: [DisplayPosition] = []
+
+    private func rebuildDisplayData() {
+        displayData = buildDisplayPositions(sortBy: displayMode)
+    }
+
     private func buildDisplayPositions(sortBy mode: PositionDisplayMode) -> [DisplayPosition] {
         filteredPositions.map { pos in
             let price = currentPrice(for: pos)
@@ -69,7 +75,7 @@ struct PortfolioView: View {
 
     private var selectedStocks: [Stock] {
         selectedPositions.compactMap { pos in
-            guard var stock = stockViewModel.allStocks.first(where: { $0.code == pos.code }) else {
+            guard var stock = stockViewModel.allStocksDict[pos.code] else {
                 return nil
             }
             if let live = stockViewModel.livePrices[pos.code] {
@@ -227,7 +233,7 @@ struct PortfolioView: View {
                 .background(Color(hex: "1E1E1E"))
 
                 List {
-                    ForEach(buildDisplayPositions(sortBy: displayMode)) { dp in
+                    ForEach(displayData) { dp in
                         HStack(spacing: 0) {
                             if isSelectionMode {
                                 Button {
@@ -380,6 +386,16 @@ struct PortfolioView: View {
         }
         .onAppear {
             stockViewModel.updatePositionPrices()
+            rebuildDisplayData()
+        }
+        .onChange(of: displayMode) { _ in
+            rebuildDisplayData()
+        }
+        .onChange(of: searchText) { _ in
+            rebuildDisplayData()
+        }
+        .onReceive(stockViewModel.$livePrices) { _ in
+            rebuildDisplayData()
         }
         .sheet(isPresented: $showSellSheet) {
             if let position = selectedPosition {

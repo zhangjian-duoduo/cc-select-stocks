@@ -19,18 +19,8 @@ struct ChangeItem: Identifiable, Codable {
         name = try container.decode(String.self, forKey: .name)
         type = try container.decode(String.self, forKey: .type)
         sector = try container.decodeIfPresent(String.self, forKey: .sector)
-        price = try Self.decodeNumeric(container: container, key: .price)
-        change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
-    }
-
-    private static func decodeNumeric(container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> Double? {
-        if let doubleValue = try? container.decode(Double.self, forKey: key) {
-            return doubleValue
-        }
-        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
-            return doubleValue
-        }
-        return nil
+        price = try container.decodeNumeric(key: .price)
+        change_pct = try container.decodeNumeric(key: .change_pct)
     }
 }
 
@@ -66,19 +56,9 @@ struct RemovedItem: Identifiable, Codable {
         code = try container.decode(String.self, forKey: .code)
         name = try container.decode(String.self, forKey: .name)
         sector = try container.decodeIfPresent(String.self, forKey: .sector)
-        price = try Self.decodeNumeric(container: container, key: .price)
-        change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
+        price = try container.decodeNumeric(key: .price)
+        change_pct = try container.decodeNumeric(key: .change_pct)
         removed_at = try container.decodeIfPresent(String.self, forKey: .removed_at)
-    }
-
-    private static func decodeNumeric(container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> Double? {
-        if let doubleValue = try? container.decode(Double.self, forKey: key) {
-            return doubleValue
-        }
-        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
-            return doubleValue
-        }
-        return nil
     }
 }
 
@@ -135,7 +115,7 @@ struct ChangesView: View {
                 dateData: dateData,
                 accentColor: Color(hex: "F44336"),
                 canGoNext: canGoNext,
-                onMonthChanged: { loadMonthData(month: $0) },
+                onMonthChanged: { month in Task { await loadMonthData(month: month) } },
                 onDateSelected: { date in Task { await loadChangesAsync(date: date) } }
             )
 
@@ -214,41 +194,42 @@ struct ChangesView: View {
         .navigationTitle("每日变化")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            loadMonthData(month: currentYearMonth)
+            Task { await loadMonthData(month: currentYearMonth) }
+        }
+        .refreshable {
+            await loadMonthData(month: currentYearMonth)
         }
     }
 
-    private func loadMonthData(month: String) {
-        Task { @MainActor in
-            isLoading = true
-            errorMessage = nil
+    private func loadMonthData(month: String) async {
+        isLoading = true
+        errorMessage = nil
 
-            do {
-                let result: MonthResponse = try await APIClient.get("/changes/month/\(month)")
-                if result.code == 0, let data = result.data {
-                    monthData = data
-                    if let lastDate = data.dates.last {
-                        selectedDate = lastDate
-                        await loadChangesAsync(date: lastDate)
-                    }
-                } else {
-                    errorMessage = result.message ?? "未知错误"
+        do {
+            let result: MonthResponse = try await APIClient.get("/changes/month/\(month)")
+            if result.code == 0, let data = result.data {
+                monthData = data
+                if let lastDate = data.dates.last {
+                    selectedDate = lastDate
+                    await loadChangesAsync(date: lastDate)
                 }
-            } catch let error as APIClient.APIError {
-                errorMessage = error.errorDescription
-                print("[ChangesView] API错误(month): \(error)")
-                if case .decodingError(let de) = error {
-                    print("[ChangesView] 原始解码错误(MonthResponse): \(de)")
-                }
-            } catch let error as DecodingError {
-                errorMessage = "数据解析失败"
-                print("[ChangesView] 解码错误(MonthResponse): \(error)")
-            } catch {
-                errorMessage = error.localizedDescription
-                print("[ChangesView] 其他错误(month): \(error)")
+            } else {
+                errorMessage = result.message ?? "未知错误"
             }
-            isLoading = false
+        } catch let error as APIClient.APIError {
+            errorMessage = error.errorDescription
+            print("[ChangesView] API错误(month): \(error)")
+            if case .decodingError(let de) = error {
+                print("[ChangesView] 原始解码错误(MonthResponse): \(de)")
+            }
+        } catch let error as DecodingError {
+            errorMessage = "数据解析失败"
+            print("[ChangesView] 解码错误(MonthResponse): \(error)")
+        } catch {
+            errorMessage = error.localizedDescription
+            print("[ChangesView] 其他错误(month): \(error)")
         }
+        isLoading = false
     }
 
     private func loadChangesAsync(date: String) async {

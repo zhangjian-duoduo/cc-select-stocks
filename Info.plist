@@ -25,6 +25,10 @@
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+	<key>API_BASE_URL</key>
+	<string>http://8.163.91.16:5000/api/v1</string>
+	<key>API_KEY</key>
+	<string>select-stocks-2024</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>eastmoney</string>

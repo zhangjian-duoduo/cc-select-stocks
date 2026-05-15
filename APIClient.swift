@@ -3,7 +3,7 @@ import Foundation
 /// 统一的 API 客户端，处理鉴权、重试、超时
 struct APIClient {
     static let baseURL = AppConfig.baseURL
-    static let apiKey = "select-stocks-2024"
+    static let apiKey = AppConfig.apiKey
 
     enum APIError: LocalizedError {
         case urlError

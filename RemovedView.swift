@@ -18,19 +18,9 @@ struct RemovedStock: Identifiable, Codable {
         code = try container.decode(String.self, forKey: .code)
         name = try container.decode(String.self, forKey: .name)
         sector = try container.decodeIfPresent(String.self, forKey: .sector)
-        price = try Self.decodeNumeric(container: container, key: .price)
-        change_pct = try Self.decodeNumeric(container: container, key: .change_pct)
+        price = try container.decodeNumeric(key: .price)
+        change_pct = try container.decodeNumeric(key: .change_pct)
         removed_at = try container.decodeIfPresent(String.self, forKey: .removed_at)
-    }
-
-    private static func decodeNumeric(container: KeyedDecodingContainer<CodingKeys>, key: CodingKeys) throws -> Double? {
-        if let doubleValue = try? container.decode(Double.self, forKey: key) {
-            return doubleValue
-        }
-        if let stringValue = try? container.decode(String.self, forKey: key), let doubleValue = Double(stringValue) {
-            return doubleValue
-        }
-        return nil
     }
 }
 
