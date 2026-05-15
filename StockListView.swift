@@ -180,14 +180,15 @@ struct StockCard: View {
         let live = stockViewModel.livePrices[stock.code]
         let displayPrice = live?.price ?? stock.price ?? 0
         let displayChangePct = live?.changePct ?? stock.change_pct ?? 0
+        let isHolding = stockViewModel.positions[stock.code] != nil
 
         VStack(alignment: .leading, spacing: 4) {
             // 第一行：名称 + 价格 + 当日涨跌 + 收藏
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(stock.name)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(.white)
+                        .font(.system(size: 13, weight: isHolding ? .bold : .medium))
+                        .foregroundColor(isHolding ? Color(hex: "F44336") : .white)
                     HStack(spacing: 4) {
                         if let sector = stock.sector, !sector.isEmpty {
                             Text(sector)

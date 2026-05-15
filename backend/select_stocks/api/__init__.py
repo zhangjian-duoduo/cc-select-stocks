@@ -110,7 +110,8 @@ def get_stocks():
             SELECT s.code, s.name, s.price, s.change_pct, s.selected_at, s.sector,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                    a.macd_divergence, a.trend_analysis, a.price_position,
-                   f.net_profit_yoy, f.net_profit_qoq, a.roe,
+                   f.net_profit_yoy, f.net_profit_qoq,
+                   COALESCE(f.roe, a.roe) as roe,
                    a.revenue, a.book_value_per_share,
                    a.total_market_cap, a.dividend_count,
                     a.other_receivables_ratio, a.fund_embezzlement_risk,
@@ -118,7 +119,7 @@ def get_stocks():
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
             LEFT JOIN (
-                SELECT h.code, h.net_profit_yoy, h.net_profit_qoq
+                SELECT h.code, h.net_profit_yoy, h.net_profit_qoq, h.roe
                 FROM stock_financial_history h
                 INNER JOIN (
                     SELECT code, MAX(report_date) as max_date
@@ -245,18 +246,29 @@ def filter_stocks():
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
     try:
-        # 获取所有股票和分析数据
+        # 获取所有股票和分析数据（财务数据优先从 stock_financial_history 取最新）
         cursor.execute("""
             SELECT s.code, s.name, s.price, s.change_pct, s.selected_at, s.sector,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                    a.macd_divergence, a.trend_analysis, a.price_position,
-                   a.roe, a.net_profit_yoy, a.net_profit_qoq,
+                   COALESCE(f.roe, a.roe) as roe,
+                   COALESCE(f.net_profit_yoy, a.net_profit_yoy) as net_profit_yoy,
+                   COALESCE(f.net_profit_qoq, a.net_profit_qoq) as net_profit_qoq,
                    a.revenue, a.book_value_per_share,
                    a.total_market_cap, a.dividend_count,
                    a.other_receivables_ratio, a.fund_embezzlement_risk,
                    a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
+            LEFT JOIN (
+                SELECT h.code, h.net_profit_yoy, h.net_profit_qoq, h.roe
+                FROM stock_financial_history h
+                INNER JOIN (
+                    SELECT code, MAX(report_date) as max_date
+                    FROM stock_financial_history
+                    GROUP BY code
+                ) m ON h.code = m.code AND h.report_date = m.max_date
+            ) f ON s.code = f.code
         """)
 
         stocks = cursor.fetchall()
