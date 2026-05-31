@@ -7,16 +7,9 @@
 import pymysql
 from datetime import datetime, timedelta
 import random
+from db import get_db
 
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-conn = pymysql.connect(**DB_CONFIG)
+conn = get_db()
 cursor = conn.cursor()
 
 print("获取股票财务数据...")
@@ -75,7 +68,7 @@ print(f"总计: {result[0]} 条记录, {result[1]} 只股票, {result[2]} 个日
 print("更新股票名称...")
 cursor.execute("""
     UPDATE daily_financial_updates d
-    JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
+    JOIN stock_names n ON d.code = n.code
     SET d.name = n.name
     WHERE d.name = '' OR d.name IS NULL
 """)

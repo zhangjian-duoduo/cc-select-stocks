@@ -12,6 +12,7 @@ import requests
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 import pandas as pd
+from db import get_db
 
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -66,13 +67,7 @@ class DataFetcher:
                         if len(parts) == 2:
                             stock_names[parts[0]] = parts[1]
 
-            conn = pymysql.connect(
-                host='localhost',
-                user='root',
-                password='',
-                database='select_stocks',
-                charset='utf8mb4'
-            )
+            conn = get_db()
             cursor = conn.cursor(pymysql.cursors.DictCursor)
             cursor.execute("SELECT DISTINCT code FROM stock_kline")
             rows = cursor.fetchall()
@@ -152,13 +147,7 @@ class DataFetcher:
         # 优先从本地数据库获取
         try:
             import pymysql
-            conn = pymysql.connect(
-                host='localhost',
-                user='root',
-                password='',
-                database='select_stocks',
-                charset='utf8mb4'
-            )
+            conn = get_db()
             cursor = conn.cursor(pymysql.cursors.DictCursor)
             cursor.execute("""
                 SELECT date, open, high, low, close, volume
@@ -205,13 +194,7 @@ class DataFetcher:
         # 优先从本地数据库获取
         try:
             import pymysql
-            conn = pymysql.connect(
-                host='localhost',
-                user='root',
-                password='',
-                database='select_stocks',
-                charset='utf8mb4'
-            )
+            conn = get_db()
             cursor = conn.cursor(pymysql.cursors.DictCursor)
             cursor.execute("""
                 SELECT date, open, high, low, close, volume
@@ -257,13 +240,7 @@ class DataFetcher:
         # 优先从本地数据库获取
         try:
             import pymysql
-            conn = pymysql.connect(
-                host='localhost',
-                user='root',
-                password='',
-                database='select_stocks',
-                charset='utf8mb4'
-            )
+            conn = get_db()
             cursor = conn.cursor(pymysql.cursors.DictCursor)
             cursor.execute("""
                 SELECT date, open, high, low, close, volume

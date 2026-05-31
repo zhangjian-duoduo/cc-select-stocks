@@ -11,17 +11,7 @@ import requests
 import re
 import time
 
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4',
-    'autocommit': True
-}
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
+from db import get_db
 
 def parse_sina_number(s):
     """解析新浪财经中的数字（万元），返回元"""

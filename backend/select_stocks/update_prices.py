@@ -3,12 +3,13 @@
 import pymysql
 from data_fetcher import DataFetcher
 import time
+from db import get_db
 
 df = DataFetcher()
 df.min_interval = 0.2
 df.max_interval = 0.4
 
-conn = pymysql.connect(host='localhost', user='root', password='', database='select_stocks', charset='utf8mb4')
+conn = get_db()
 cursor = conn.cursor()
 
 cursor.execute("SELECT code FROM stocks")

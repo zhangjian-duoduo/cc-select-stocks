@@ -21,18 +21,7 @@ import socket
 # 设置网络超时
 socket.setdefaulttimeout(10)
 
-# 数据库配置
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-def get_db():
-    """获取数据库连接"""
-    return pymysql.connect(**DB_CONFIG)
+from db import get_db
 
 def create_kline_table():
     """创建K线数据表"""

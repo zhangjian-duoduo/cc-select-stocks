@@ -136,6 +136,10 @@ struct SellSheetView: View {
                         errorMessage = "数量必须是100的整数倍"
                         return
                     }
+                    guard qty <= 1000000 else {
+                        errorMessage = "单笔不超过100万股"
+                        return
+                    }
                     guard qty <= position.quantity else {
                         errorMessage = "超出持仓数量(\(position.quantity)股)"
                         return
@@ -165,7 +169,7 @@ struct SellSheetView: View {
                 }
             }
             .onAppear {
-                quantity = ""
+                quantity = String(position.quantity)
             }
         }
     }

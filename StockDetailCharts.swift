@@ -719,6 +719,74 @@ extension StockDetailContent {
         .cornerRadius(12)
     }
 
+    // MARK: - 机构持仓趋势图
+
+    @ViewBuilder
+    func 机构持仓趋势图(data: [Stock.InstOwnershipData]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("机构持仓趋势")
+                .font(.headline)
+                .foregroundColor(.white)
+
+            Chart {
+                ForEach(data.indices, id: \.self) { index in
+                    LineMark(
+                        x: .value("季度", index),
+                        y: .value("机构%", data[index].inst_ratio ?? 0)
+                    )
+                    .foregroundStyle(Color(hex: "4CAF50"))
+
+                    AreaMark(
+                        x: .value("季度", index),
+                        y: .value("机构%", data[index].inst_ratio ?? 0)
+                    )
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color(hex: "4CAF50").opacity(0.3), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                }
+            }
+            .frame(height: 160)
+            .chartXAxis {
+                AxisMarks(values: .stride(by: 1)) { index in
+                    if let idx = index.as(Int.self), idx < data.count {
+                        let d = data[idx]
+                        AxisValueLabel(d.date?.suffix(5) ?? "")
+                            .foregroundStyle(Color.gray)
+                    }
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { _ in
+                    AxisValueLabel()
+                        .foregroundStyle(Color.gray)
+                }
+            }
+
+            // Legend
+            HStack(spacing: 16) {
+                HStack(spacing: 4) {
+                    Circle().fill(Color(hex: "4CAF50")).frame(width: 8, height: 8)
+                    Text("机构持股")
+                        .font(.caption2)
+                        .foregroundColor(.gray)
+                }
+                if let last = data.last, let total = last.total_ratio, let inst = last.inst_ratio {
+                    Spacer()
+                    Text(String(format: "最新: 机构 %.1f%% / 十大合计 %.1f%%", inst, total))
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+        .padding()
+        .background(Color(hex: "1E1E1E"))
+        .cornerRadius(12)
+    }
+
     // MARK: - 辅助函数
 
     func valuationColor(_ percentile: Double) -> Color {

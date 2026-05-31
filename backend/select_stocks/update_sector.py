@@ -6,16 +6,7 @@ import pymysql
 import akshare as ak
 import time
 
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
+from db import get_db
 
 conn = get_db()
 cursor = conn.cursor(pymysql.cursors.DictCursor)

@@ -400,8 +400,29 @@ class StockViewModel: ObservableObject {
     @Published var positions: [String: Position] = [:]
     @Published var trades: [Trade] = []
 
+    @AppStorage("initialCapital") var initialCapital: Double = 100000
+
     let positionsKey = "virtual_positions"
     let tradesKey = "virtual_trades"
+
+    var cashBalance: Double {
+        let bought = trades.filter { $0.isBuy }.reduce(0.0) { $0 + $1.totalAmount }
+        let sold = trades.filter { !$0.isBuy }.reduce(0.0) { $0 + $1.totalAmount }
+        return initialCapital - bought + sold
+    }
+
+    var netWorth: Double {
+        totalMarketValue + cashBalance
+    }
+
+    var totalReturnAllTime: Double {
+        netWorth - initialCapital
+    }
+
+    var totalReturnAllTimePct: Double {
+        guard initialCapital > 0 else { return 0 }
+        return totalReturnAllTime / initialCapital * 100
+    }
 
     func loadPositions() {
         if let data = UserDefaults.standard.data(forKey: positionsKey),
@@ -500,6 +521,12 @@ class StockViewModel: ObservableObject {
         saveTrades()
         savePositions()
         return true
+    }
+
+    // 删除指定交易记录
+    func deleteTrades(ids: Set<String>) {
+        trades.removeAll { ids.contains($0.id) }
+        saveTrades()
     }
 
     // 获取持仓
@@ -627,6 +654,11 @@ class StockViewModel: ObservableObject {
         } catch {
             print("刷新持仓价格失败: \(error)")
         }
+    }
+
+    // 持仓总成本
+    var totalCost: Double {
+        positions.values.reduce(0) { $0 + $1.totalCost }
     }
 
     // 总盈亏（实时价格计算）

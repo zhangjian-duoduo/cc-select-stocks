@@ -23,11 +23,7 @@ import time
 from datetime import datetime, timedelta
 
 
-DB_CONFIG = {
-    'host': 'localhost', 'user': 'root', 'password': '',
-    'database': 'select_stocks', 'charset': 'utf8mb4',
-    'autocommit': True
-}
+from db import get_db
 
 EMERGING_CONCEPT_KEYWORDS = [
     '人工智能', '人形机器人', '机器人', '新能源', '新能源汽车',
@@ -52,9 +48,6 @@ def is_st_stock(stock_name):
         if keyword in name_upper:
             return True
     return False
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
 
 def get_listed_days(code, cursor):
     cursor.execute("""

@@ -11,18 +11,7 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
 
-# 数据库配置
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-def get_db():
-    """获取数据库连接"""
-    return pymysql.connect(**DB_CONFIG)
+from db import get_db
 
 def create_holders_table():
     """创建股东人数表"""

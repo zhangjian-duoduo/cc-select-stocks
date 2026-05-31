@@ -1,0 +1,22 @@
+[Unit]
+Description=Select Stocks Background Scheduler
+After=network.target mysql.service select-stocks-api.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/select_stocks
+Environment="PYTHONUNBUFFERED=1"
+Environment="DB_HOST=localhost"
+Environment="DB_USER=root"
+Environment="DB_PASSWORD="
+Environment="DB_NAME=select_stocks"
+ExecStart=/usr/bin/python3 /root/select_stocks/scheduler_manager.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/select_stocks/logs/scheduler.log
+StandardError=append:/root/select_stocks/logs/scheduler_error.log
+
+[Install]
+WantedBy=multi-user.target

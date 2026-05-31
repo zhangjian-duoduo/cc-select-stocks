@@ -99,6 +99,10 @@ struct TradeSheetView: View {
                         errorMessage = "数量必须为100的整数倍"
                         return
                     }
+                    guard qty <= 1000000 else {
+                        errorMessage = "单笔不超过100万股"
+                        return
+                    }
                     guard let price = stockViewModel.latestPrice(for: stock.code) else {
                         errorMessage = "无法获取当前价格"
                         return

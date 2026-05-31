@@ -5,6 +5,7 @@
 每日下午4点执行
 """
 
+import sys
 import threading
 import time
 from datetime import datetime, timedelta
@@ -16,18 +17,8 @@ import pymysql
 import concurrent.futures
 import math
 
-
-# 数据库配置
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
+sys.path.insert(0, '/root/select_stocks')
+from db import get_db
 
 def update_daily_kline():
     """更新日K线数据 - 委托给 kline_manager（含除权检测）"""
@@ -249,11 +240,9 @@ def run_stock_selection():
                 VALUES (%s, %s, %s)
             """, (stock['code'], stock['name'], today))
 
-        # 清空旧标准选股数据（保留新规数据）
+        # 清空旧标准选股数据（保留新规数据，不删 stock_analysis 里的财务数据）
         cursor.execute("DELETE FROM stocks WHERE selection_type = %s", ("standard",))
         print(f"[定时任务] 清除标准选股 stocks: {cursor.rowcount} 条")
-        cursor.execute("DELETE FROM stock_analysis WHERE selection_type = %s", ("standard",))
-        print(f"[定时任务] 清除标准选股 analysis: {cursor.rowcount} 条")
 
         # 插入新数据
         for stock in selected_stocks:
@@ -289,15 +278,15 @@ def update_stocks_price():
                     SELECT code, MAX(date) as max_date
                     FROM stock_kline WHERE period='daily'
                     GROUP BY code
-                ) m ON k.code COLLATE utf8mb4_unicode_ci = m.code COLLATE utf8mb4_unicode_ci
+                ) m ON k.code = m.code
                     AND k.date = m.max_date AND k.period = 'daily'
-            ) latest ON s.code COLLATE utf8mb4_unicode_ci = latest.code COLLATE utf8mb4_unicode_ci
+            ) latest ON s.code = latest.code
             SET s.price = latest.close
         """)
         price_updated = cursor.rowcount
 
         # 更新涨跌幅: (最新收盘 - 前一交易日收盘) / 前一交易日收盘
-        c2 = conn.cursor()
+        c2 = conn.cursor(pymysql.cursors.DictCursor)
         c2.execute("SELECT code FROM stocks")
         stock_codes = [r['code'] for r in c2.fetchall()]
         pct_updated = 0
@@ -707,21 +696,25 @@ def daily_task():
     import os
 
     # 检查是否有其他daily_task在运行，避免重复执行
-    pid_file = '/tmp/daily_task.lock'
-    if os.path.exists(pid_file):
+    # 使用时间戳锁：写入任务开始时间，如果超过6小时视为过期残留
+    lock_file = '/tmp/daily_task.lock'
+    if os.path.exists(lock_file):
         try:
-            with open(pid_file, 'r') as f:
-                old_pid = int(f.read().strip())
-            # 检查进程是否还活着
-            if os.path.exists(f'/proc/{old_pid}'):
-                print("[每日任务] 上一次任务还在运行中，跳过本次执行")
+            with open(lock_file, 'r') as f:
+                content = f.read().strip()
+            start_time = float(content)
+            elapsed = time.time() - start_time
+            if elapsed < 6 * 3600:
+                print(f"[每日任务] 上一次任务还在运行中（{elapsed:.0f}秒前），跳过本次执行")
                 return
+            else:
+                print(f"[每日任务] 锁文件已过期（{elapsed:.0f}秒前），忽略并继续")
         except:
             pass
 
-    # 写入当前进程PID
-    with open(pid_file, 'w') as f:
-        f.write(str(os.getpid()))
+    # 写入当前时间戳
+    with open(lock_file, 'w') as f:
+        f.write(str(time.time()))
 
     try:
         print("=" * 50)
@@ -800,7 +793,7 @@ def daily_task():
                 print("[每日任务] 同步行业板块到stocks（周一）...")
                 conn_sync = get_db()
                 cur_sync = conn_sync.cursor()
-                sql = ("UPDATE stocks s INNER JOIN stock_analysis a ON s.code COLLATE utf8mb4_unicode_ci = a.code COLLATE utf8mb4_unicode_ci SET s.sector = a.sector WHERE a.sector IS NOT NULL AND a.sector != ''")
+                sql = ("UPDATE stocks s INNER JOIN stock_analysis a ON s.code = a.code SET s.sector = a.sector WHERE a.sector IS NOT NULL AND a.sector != ''")
                 cur_sync.execute(sql)
                 n_sync = cur_sync.rowcount
                 conn_sync.commit()
@@ -839,16 +832,19 @@ def daily_task():
         except Exception as e:
             print(f"[每日任务] 资金占用风险更新失败: {e}")
 
-        # 8.7 同步新规选股财务数据 — 增量
+        # 8.7 同步新规选股财务数据 — 全量
         try:
-            print(f"[每日任务] 开始增量同步新规财务数据 ({len(today_codes)} 只)...")
+            print("[每日任务] 开始全量同步新规财务数据...")
             import sync_new_rule_financial
-            if today_codes:
-                sync_new_rule_financial.main(codes=today_codes)
-            else:
-                print("[每日任务] 今日无财报更新，跳过新规财务")
+            sync_new_rule_financial.main()
         except Exception as e:
             print(f"[每日任务] 新规财务数据同步失败: {e}")
+
+        # 8.75 增量同步机构持仓数据
+        try:
+            sync_institutional_holdings(codes=today_codes)
+        except Exception as e:
+            print(f"[每日任务] 机构持仓同步失败: {e}")
 
         # 8.8 运行新规选股
         try:
@@ -857,6 +853,14 @@ def daily_task():
             new_rule_selector.main()
         except Exception as e:
             print(f"[每日任务] 新规选股失败: {e}")
+
+        # 8.9 更新PE数据（PE-TTM + PE百分位）
+        try:
+            print("[每日任务] 开始更新PE数据...")
+            import fill_pe_data
+            fill_pe_data.update_pe_data()
+        except Exception as e:
+            print(f"[每日任务] PE数据更新失败: {e}")
 
         # 9. 同步概念板块数据（每日表现 + 每周一同步映射）
         try:
@@ -876,9 +880,24 @@ def daily_task():
     finally:
         # 清理锁文件
         try:
-            os.remove(pid_file)
+            os.remove(lock_file)
         except:
             pass
+
+
+def sync_institutional_holdings(codes=None):
+    """同步机构持仓数据：传入 codes 列表做增量更新，不传则跳过"""
+    if not codes:
+        print("[机构持仓] 无增量代码，跳过")
+        return
+    try:
+        import sys
+        sys.path.insert(0, '/root/select_stocks')
+        from sync_institutional_holdings import sync_incremental
+        print(f"[机构持仓] 增量同步 {len(codes)} 只股票的机构持仓数据...")
+        sync_incremental(codes)
+    except Exception as e:
+        print(f"[机构持仓] 增量同步失败: {e}")
 
 
 def update_incremental_financial():

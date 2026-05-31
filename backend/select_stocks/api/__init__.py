@@ -12,6 +12,7 @@ import logging
 from datetime import datetime, timedelta
 from functools import wraps
 from collections import defaultdict
+from db import get_db
 
 # 日志配置
 logging.basicConfig(
@@ -39,38 +40,6 @@ def require_api_key(f):
             return jsonify({'code': 403, 'message': '未授权访问'}), 403
         return f(*args, **kwargs)
     return decorated
-
-# 数据库配置（密码从环境变量读取，未设置则使用空密码）
-DB_CONFIG = {
-    'host': os.environ.get('DB_HOST', 'localhost'),
-    'user': os.environ.get('DB_USER', 'root'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'select_stocks'),
-    'charset': 'utf8mb4',
-    'connect_timeout': 10,
-    'read_timeout': 30,
-    'autocommit': True
-}
-
-# 生产环境建议使用 DBUtils 连接池替代每次新建连接:
-#   pip install DBUtils
-#   from dbutils.pooled_db import PooledDB
-#   pool = PooledDB(pymysql, mincached=2, maxcached=10, maxconnections=20, **DB_CONFIG)
-#   def get_db():
-#       return pool.connection()
-
-def get_db():
-    """获取数据库连接（带重试）"""
-    import time
-    for attempt in range(3):
-        try:
-            return pymysql.connect(**DB_CONFIG)
-        except pymysql.Error as e:
-            if attempt < 2:
-                logger.warning(f"数据库连接失败(尝试 {attempt+1}/3): {e}")
-                time.sleep(1)
-            else:
-                raise
 
 def extract_quarter(report_name):
     """从报告名称提取季度"""
@@ -115,7 +84,8 @@ def get_stocks():
                    a.revenue, a.book_value_per_share,
                    a.total_market_cap, a.dividend_count,
                     a.other_receivables_ratio, a.fund_embezzlement_risk,
-                    a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk
+                    a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk,
+                    a.pe_ttm, a.pe_percentile, a.financial_updated_at
             FROM stocks s
             LEFT JOIN stock_analysis a ON s.code = a.code
             LEFT JOIN (
@@ -124,7 +94,7 @@ def get_stocks():
                 INNER JOIN (
                     SELECT code, MAX(report_date) as max_date
                     FROM stock_financial_history
-                    WHERE code IN (SELECT code FROM stocks WHERE selection_type = %s)
+                    WHERE code IN (SELECT code FROM stocks WHERE selection_type = %s) AND net_profit_yoy IS NOT NULL
                     GROUP BY code
                 ) m ON h.code = m.code AND h.report_date = m.max_date
             ) f ON s.code = f.code
@@ -152,7 +122,7 @@ def get_stocks():
                 else:
                     row[json_field] = None
             # 统一处理数值字段
-            for num_field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position', 'book_value_per_share', 'total_market_cap', 'dividend_count', 'other_receivables_ratio', 'fund_embezzlement_risk', 'financial_fraud_risk']:
+            for num_field in ['price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration', 'price_position', 'book_value_per_share', 'total_market_cap', 'dividend_count', 'other_receivables_ratio', 'fund_embezzlement_risk', 'financial_fraud_risk', 'pe_ttm', 'pe_percentile', 'rd_ratio', 'debt_ratio', 'operating_cash_flow']:
                 if row.get(num_field) is not None:
                     try:
                         val = row[num_field]
@@ -461,6 +431,297 @@ def apply_filters(stocks, filters, conn=None):
         conn.close()
 
     return result
+
+
+def _parse_revenue_yi(revenue_str):
+    """解析营业收入为亿元"""
+    if not revenue_str:
+        return 0
+    try:
+        s = str(revenue_str).strip()
+        if '亿' in s:
+            return float(s.replace('亿', ''))
+        elif '万' in s:
+            return float(s.replace('万', '')) / 10000
+        else:
+            return float(s) / 1e8
+    except:
+        return 0
+
+
+EMERGING_CONCEPT_KEYWORDS = [
+    '人工智能', '人形机器人', '机器人', '新能源', '新能源汽车',
+    '集成电路', '半导体', '国产芯片', '汽车芯片', '第三代半导体',
+    '航空航天', '军工', '卫星导航', '低空经济',
+    '生物医药', '创新药', '医疗器械',
+    '量子科技', '量子通信', '脑机接口', '6G', '5G',
+    '新型储能', '储能', '氢能', '智能机器人', '机器视觉', '传感器',
+    '新材料', '碳纤维', '工业互联网', '工业母机',
+    '云计算', '大数据', '数字经济', '信创', '国产软件',
+    '光伏', '风电',
+]
+
+
+def _format_stock_row(stock_row, concept_map, perf_map):
+    """将数据库行格式化为API响应格式，附加概念和大涨原因"""
+    import json
+    from decimal import Decimal
+
+    # 解析JSON字段
+    for json_field in ['holders_trend', 'macd_divergence', 'trend_analysis']:
+        if stock_row.get(json_field):
+            try:
+                if isinstance(stock_row[json_field], str):
+                    stock_row[json_field] = json.loads(stock_row[json_field])
+            except:
+                stock_row[json_field] = None
+        else:
+            stock_row[json_field] = None
+
+    # 统一处理数值字段
+    numeric_fields = [
+        'price', 'change_pct', 'change_5y', 'price_percentile', 'chip_concentration',
+        'price_position', 'book_value_per_share', 'total_market_cap', 'dividend_count',
+        'other_receivables_ratio', 'fund_embezzlement_risk', 'financial_fraud_risk',
+        'rd_ratio', 'debt_ratio', 'operating_cash_flow', 'pe_ttm', 'pe_percentile',
+    ]
+    for num_field in numeric_fields:
+        if stock_row.get(num_field) is not None:
+            try:
+                val = stock_row[num_field]
+                if isinstance(val, (int, float, Decimal)):
+                    stock_row[num_field] = float(val)
+                elif isinstance(val, str) and val:
+                    stock_row[num_field] = float(val)
+                else:
+                    stock_row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
+            except:
+                stock_row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
+        else:
+            stock_row[num_field] = 0.0 if num_field in ('price', 'change_pct') else None
+
+    # 附加概念板块和大涨原因
+    code = stock_row.get('code', '')
+    concepts = concept_map.get(code, [])
+    c_pct = stock_row.get('change_pct', 0) or 0
+    c_pct_f = float(c_pct) if c_pct else 0
+
+    surge_reason = None
+    surge_concept = None
+    top_concepts = concepts[:5]
+    if c_pct_f >= 5.0 and concepts:
+        best_concept = None
+        best_pct = 0
+        for c in concepts:
+            cp = perf_map.get(c, -999)
+            if cp > best_pct:
+                best_pct = cp
+                best_concept = c
+        if best_concept and best_pct > 0:
+            surge_concept = best_concept
+            if c_pct_f >= 9.9:
+                surge_reason = f"{surge_concept}领涨+{best_pct:.1f}%"
+            elif c_pct_f >= 7.0:
+                surge_reason = f"{surge_concept}驱动+{best_pct:.1f}%"
+            else:
+                surge_reason = f"{surge_concept}走强+{best_pct:.1f}%"
+            if surge_concept in top_concepts:
+                top_concepts.remove(surge_concept)
+            top_concepts = [surge_concept] + top_concepts[:4]
+
+    stock_row['concepts'] = top_concepts
+    stock_row['surge_reason'] = surge_reason
+    stock_row['surge_concept'] = surge_concept
+    return stock_row
+
+
+@app.route('/api/v1/screen', methods=['POST'])
+@require_api_key
+def screen_stocks():
+    """动态筛选股票（支持任意条件组合，从全A股扫描）"""
+    import json
+    from decimal import Decimal
+
+    data = request.get_json() or {}
+    conditions = data.get('conditions', {})
+
+    # 只取启用的条件
+    enabled = {k: v for k, v in conditions.items() if v}
+    if not enabled:
+        return jsonify({'code': 1, 'message': '至少需要一个筛选条件', 'data': [], 'total': 0})
+
+    conn = get_db()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+
+    try:
+        # 批量加载全A股候选池 + 财务/分析数据
+        cursor.execute("""
+            SELECT n.code, n.name,
+                   a.change_5y, a.price_percentile, a.chip_concentration,
+                   a.macd_divergence, a.trend_analysis, a.price_position,
+                   a.holders_trend, a.revenue, a.book_value_per_share,
+                   a.rd_ratio, a.debt_ratio, a.operating_cash_flow,
+                   a.total_market_cap, a.dividend_count,
+                   a.other_receivables_ratio, a.fund_embezzlement_risk,
+                   a.financial_fraud_risk, a.roe, a.sector,
+                   a.net_profit_yoy, a.net_profit_qoq,
+                   a.pe_ttm, a.pe_percentile
+            FROM stock_names n
+            LEFT JOIN stock_analysis a ON n.code = a.code
+            ORDER BY n.code
+        """)
+        all_stocks = cursor.fetchall()
+        total_scanned = len(all_stocks)
+
+        # 预取批量数据
+        listed_days = {}
+        if 'listed_over_180d' in enabled:
+            c2 = conn.cursor(pymysql.cursors.DictCursor)
+            c2.execute("SELECT code, MIN(date) as earliest FROM stock_kline WHERE period='daily' GROUP BY code")
+            for row in c2.fetchall():
+                listed_days[row['code']] = (datetime.now().date() - row['earliest']).days
+            c2.close()
+
+        revenue_yoy_map = {}
+        if 'revenue_yoy_over_25' in enabled or 'rev_cagr_over_30' in enabled:
+            c2 = conn.cursor(pymysql.cursors.DictCursor)
+            c2.execute("""
+                SELECT h.code, h.revenue_yoy
+                FROM stock_financial_history h
+                INNER JOIN (
+                    SELECT code, MAX(report_date) as max_date
+                    FROM stock_financial_history WHERE revenue_yoy IS NOT NULL
+                    GROUP BY code
+                ) m ON h.code = m.code AND h.report_date = m.max_date
+            """)
+            for row in c2.fetchall():
+                try:
+                    val = str(row['revenue_yoy']).replace('%', '').replace('+', '').strip()
+                    revenue_yoy_map[row['code']] = float(val)
+                except:
+                    pass
+            c2.close()
+
+        inst_ownership_map = {}
+        if 'inst_ownership_over_5' in enabled:
+            c2 = conn.cursor(pymysql.cursors.DictCursor)
+            c2.execute("""
+                SELECT h.code, h.inst_ratio, h.total_ratio
+                FROM stock_institutional_holdings h
+                INNER JOIN (
+                    SELECT code, MAX(report_date) as max_date
+                    FROM stock_institutional_holdings GROUP BY code
+                ) m ON h.code = m.code AND h.report_date = m.max_date
+            """)
+            for row in c2.fetchall():
+                inst_ratio = float(row['inst_ratio']) if row['inst_ratio'] else 0
+                total_ratio = float(row['total_ratio']) if row['total_ratio'] else 0
+                inst_ownership_map[row['code']] = max(inst_ratio, total_ratio)
+            c2.close()
+
+        emerging_codes = set()
+        if 'emerging_concept' in enabled:
+            c2 = conn.cursor(pymysql.cursors.DictCursor)
+            c2.execute("SELECT DISTINCT code, concept_name FROM stock_concepts WHERE is_active = 1")
+            for row in c2.fetchall():
+                for kw in EMERGING_CONCEPT_KEYWORDS:
+                    if kw in row['concept_name']:
+                        emerging_codes.add(row['code'])
+                        break
+            c2.close()
+
+        # 逐股筛选
+        results = []
+        for stock in all_stocks:
+            code = stock['code']
+            name = stock['name']
+
+            if 'listed_over_180d' in enabled:
+                if listed_days.get(code, 0) < 180:
+                    continue
+
+            if 'not_st' in enabled:
+                name_upper = name.upper()
+                if any(kw in name_upper for kw in ('ST', '*ST', 'S*ST', 'SST')):
+                    continue
+
+            if 'revenue_over_5yi' in enabled:
+                if _parse_revenue_yi(stock.get('revenue')) < 5:
+                    continue
+
+            if 'revenue_yoy_over_25' in enabled:
+                yoy = revenue_yoy_map.get(code)
+                if yoy is None or yoy < 25:
+                    continue
+
+            if 'rd_ratio_over_10' in enabled:
+                rd = stock.get('rd_ratio')
+                if rd is None or rd < 10:
+                    continue
+
+            if 'rev_cagr_over_30' in enabled:
+                yoy = revenue_yoy_map.get(code)
+                if yoy is None or yoy < 30:
+                    continue
+
+            if 'debt_ratio_under_60' in enabled:
+                debt = stock.get('debt_ratio')
+                if debt is None or debt > 60:
+                    continue
+
+            if 'operating_cashflow_positive' in enabled:
+                cf = stock.get('operating_cash_flow')
+                if cf is None or cf <= 0:
+                    continue
+
+            if 'inst_ownership_over_5' in enabled:
+                if inst_ownership_map.get(code, 0) < 5:
+                    continue
+
+            if 'emerging_concept' in enabled:
+                if code not in emerging_codes:
+                    continue
+
+            results.append(stock)
+
+        # 批量附加概念板块和大涨原因
+        if results:
+            stock_codes = [r['code'] for r in results]
+            placeholders = ','.join(['%s'] * len(stock_codes))
+            concept_map = defaultdict(list)
+            cursor.execute(f"""
+                SELECT code, concept_name FROM stock_concepts
+                WHERE code IN ({placeholders}) AND is_active = 1
+                ORDER BY code, concept_name
+            """, stock_codes)
+            for cr in cursor.fetchall():
+                concept_map[cr['code']].append(cr['concept_name'])
+
+            perf_map = {}
+            cursor.execute("""
+                SELECT concept_name, change_pct FROM daily_concept_performance
+                WHERE trade_date = (SELECT MAX(trade_date) FROM daily_concept_performance)
+            """)
+            for pr in cursor.fetchall():
+                perf_map[pr['concept_name']] = float(pr['change_pct']) if pr['change_pct'] else 0
+
+            for row in results:
+                _format_stock_row(row, concept_map, perf_map)
+
+        return jsonify({
+            'code': 0,
+            'data': results,
+            'message': None,
+            'total': len(results),
+            'stats': {'total_scanned': total_scanned}
+        })
+
+    except Exception as e:
+        logger.error(f"动态筛选失败: {e}")
+        return jsonify({'code': 1, 'message': str(e), 'data': [], 'total': 0})
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def _preload_klines(stocks, filters, conn):
@@ -1112,6 +1373,8 @@ def get_stock_detail(stock_code):
     conn = get_db()
     cursor = conn.cursor(pymysql.cursors.DictCursor)
 
+    import json
+
     try:
         # 获取基本信息
         cursor.execute("SELECT * FROM stocks WHERE code = %s", (stock_code,))
@@ -1133,22 +1396,41 @@ def get_stock_detail(stock_code):
         }
 
         if analysis:
-            result['holders_trend'] = analysis.get('holders_trend', '[]')
-            result['change_5y'] = analysis.get('change_5y', 0)
-            result['price_percentile'] = analysis.get('price_percentile', 50)
-            result['chip_concentration'] = analysis.get('chip_concentration', 0.5)
-            result['macd_divergence'] = analysis.get('macd_divergence', '{}')
+            # 解析JSON字段
+            for json_field in ['holders_trend', 'macd_divergence']:
+                val = analysis.get(json_field)
+                if val and isinstance(val, str):
+                    try:
+                        result[json_field] = json.loads(val)
+                    except:
+                        result[json_field] = None
+                else:
+                    result[json_field] = val
+            result['change_5y'] = float(analysis['change_5y']) if analysis.get('change_5y') is not None else 0
+            result['price_percentile'] = float(analysis['price_percentile']) if analysis.get('price_percentile') is not None else 50
+            result['chip_concentration'] = float(analysis['chip_concentration']) if analysis.get('chip_concentration') is not None else 0.5
             result['sector'] = analysis.get('sector', '')  # 所属行业板块
             result['roe'] = analysis.get('roe', '')
             result['revenue'] = analysis.get('revenue', '')
             result['book_value_per_share'] = analysis.get('book_value_per_share', '')
             result['financial_updated_at'] = analysis.get('financial_updated_at', '')
+            result['pe_ttm'] = float(analysis['pe_ttm']) if analysis.get('pe_ttm') else None
+            result['pe_percentile'] = float(analysis['pe_percentile']) if analysis.get('pe_percentile') else None
+            result['rd_ratio'] = float(analysis['rd_ratio']) if analysis.get('rd_ratio') else None
+            result['debt_ratio'] = float(analysis['debt_ratio']) if analysis.get('debt_ratio') else None
+            result['operating_cash_flow'] = float(analysis['operating_cash_flow']) if analysis.get('operating_cash_flow') else None
+            result['total_market_cap'] = float(analysis['total_market_cap']) if analysis.get('total_market_cap') else None
+            result['dividend_count'] = int(analysis['dividend_count']) if analysis.get('dividend_count') else None
+            result['other_receivables_ratio'] = float(analysis['other_receivables_ratio']) if analysis.get('other_receivables_ratio') else None
+            result['fund_embezzlement_risk'] = int(analysis['fund_embezzlement_risk']) if analysis.get('fund_embezzlement_risk') else 0
+            result['financial_fraud_risk'] = int(analysis['financial_fraud_risk']) if analysis.get('financial_fraud_risk') else 0
+            result['price_position'] = float(analysis['price_position']) if analysis.get('price_position') else None
 
-        # 从财务历史表获取最新数据
+        # 从财务历史表获取最新数据（跳过只有 revenue_yoy 没 net_profit_yoy 的行）
         cursor.execute("""
-            SELECT net_profit_yoy, net_profit_qoq, report_name
+            SELECT net_profit_yoy, net_profit_qoq, roe, report_name
             FROM stock_financial_history
-            WHERE code = %s
+            WHERE code = %s AND net_profit_yoy IS NOT NULL
             ORDER BY report_date DESC
             LIMIT 1
         """, (stock_code,))
@@ -1156,6 +1438,26 @@ def get_stock_detail(stock_code):
         if fin_row:
             result['net_profit_yoy'] = fin_row.get('net_profit_yoy', '')
             result['net_profit_qoq'] = fin_row.get('net_profit_qoq', '')
+            # roe fallback: prefer stock_financial_history over stock_analysis
+            if fin_row.get('roe') is not None:
+                result['roe'] = float(fin_row['roe']) if fin_row['roe'] else None
+
+        # 机构持仓趋势（近8个季度）
+        cursor.execute("""
+            SELECT report_date, inst_ratio, total_ratio
+            FROM stock_institutional_holdings
+            WHERE code = %s
+            ORDER BY report_date ASC
+        """, (stock_code,))
+        inst_rows = cursor.fetchall()
+        result['inst_ownership_trend'] = [
+            {
+                'date': f"{r['report_date'][:4]}-{r['report_date'][4:6]}-{r['report_date'][6:8]}",
+                'inst_ratio': float(r['inst_ratio']) if r.get('inst_ratio') else 0,
+                'total_ratio': float(r['total_ratio']) if r.get('total_ratio') else 0,
+            }
+            for r in inst_rows
+        ]
 
         # 支持日/周/月K线 - 返回所有数据
         periods = ['daily', 'weekly', 'monthly']
@@ -1715,15 +2017,16 @@ def get_stocks_batch():
         cursor.execute(f"""
             SELECT t.code, t.close as kline_close, t.date as kline_date,
                    n.name,
-                   s.price, s.change_pct, s.sector,
+                   s.price, s.change_pct, s.sector, s.selected_at,
                    a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                    a.macd_divergence, a.trend_analysis, a.price_position, a.roe, a.sector as a_sector,
                    a.total_market_cap, a.dividend_count,
                    a.other_receivables_ratio, a.fund_embezzlement_risk,
                    a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk, a.book_value_per_share, a.revenue,
+                   a.pe_ttm, a.pe_percentile, a.financial_updated_at,
                    f.net_profit_yoy, f.net_profit_qoq, f.roe as fin_roe
             FROM (
-                SELECT CONVERT(k.code USING utf8mb4) COLLATE utf8mb4_unicode_ci as code, k.close, k.date
+                SELECT k.code, k.close, k.date
                 FROM stock_kline k
                 INNER JOIN (
                     SELECT code, MAX(date) as max_date
@@ -1732,7 +2035,7 @@ def get_stocks_batch():
                     GROUP BY code
                 ) m ON k.code = m.code AND k.date = m.max_date AND k.period = 'daily'
             ) t
-            LEFT JOIN stock_names n ON t.code = CONVERT(n.code USING utf8mb4) COLLATE utf8mb4_unicode_ci
+            LEFT JOIN stock_names n ON t.code = n.code
             LEFT JOIN stocks s ON t.code = s.code
             LEFT JOIN stock_analysis a ON t.code = a.code
             LEFT JOIN (
@@ -1741,7 +2044,7 @@ def get_stocks_batch():
                 INNER JOIN (
                     SELECT code, MAX(report_date) as max_date
                     FROM stock_financial_history
-                    WHERE code IN ({placeholders})
+                    WHERE code IN ({placeholders}) AND net_profit_yoy IS NOT NULL
                     GROUP BY code
                 ) m ON h.code = m.code AND h.report_date = m.max_date
             ) f ON t.code = f.code
@@ -1778,6 +2081,7 @@ def get_stocks_batch():
                 'price': price,
                 'change_pct': change_pct,
                 'sector': row.get('sector') or row.get('a_sector'),
+                'selected_at': row['selected_at'].strftime('%Y-%m-%d') if row.get('selected_at') else None,
                 'holders_trend': row.get('holders_trend'),
                 'change_5y': _safe_float(row.get('change_5y')),
                 'price_percentile': _safe_float(row.get('price_percentile')),
@@ -1795,6 +2099,12 @@ def get_stocks_batch():
                 'financial_fraud_risk': _safe_float(row.get('financial_fraud_risk')),
                 'book_value_per_share': _safe_float(row.get('book_value_per_share')),
                 'revenue': row.get('revenue'),
+                'pe_ttm': _safe_float(row.get('pe_ttm')),
+                'pe_percentile': _safe_float(row.get('pe_percentile')),
+                'rd_ratio': _safe_float(row.get('rd_ratio')),
+                'debt_ratio': _safe_float(row.get('debt_ratio')),
+                'operating_cash_flow': _safe_float(row.get('operating_cash_flow')),
+                'financial_updated_at': row.get('financial_updated_at', ''),
             }
             result[code] = item
 
@@ -1803,12 +2113,13 @@ def get_stocks_batch():
         if missing:
             m_placeholders = ','.join(['%s'] * len(missing))
             cursor.execute(f"""
-                SELECT s.code, s.name, s.price, s.change_pct, s.sector,
+                SELECT s.code, s.name, s.price, s.change_pct, s.sector, s.selected_at,
                        a.holders_trend, a.change_5y, a.price_percentile, a.chip_concentration,
                        a.macd_divergence, a.trend_analysis, a.price_position, a.roe, a.sector as a_sector,
                        a.total_market_cap, a.dividend_count,
                        a.other_receivables_ratio, a.fund_embezzlement_risk,
                        a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk, a.book_value_per_share,
+                       a.pe_ttm, a.pe_percentile, a.financial_updated_at,
                        f.net_profit_yoy, f.net_profit_qoq, f.roe as fin_roe
                 FROM stocks s
                 LEFT JOIN stock_analysis a ON s.code = a.code
@@ -1839,6 +2150,7 @@ def get_stocks_batch():
                     'price': float(s['price']) if s.get('price') else 0,
                     'change_pct': float(s['change_pct']) if s.get('change_pct') else None,
                     'sector': s.get('sector') or s.get('a_sector'),
+                    'selected_at': s['selected_at'].strftime('%Y-%m-%d') if s.get('selected_at') else None,
                     'holders_trend': s.get('holders_trend'),
                     'change_5y': _safe_float(s.get('change_5y')),
                     'price_percentile': _safe_float(s.get('price_percentile')),
@@ -1855,6 +2167,12 @@ def get_stocks_batch():
                     'fund_embezzlement_risk': _safe_float(s.get('fund_embezzlement_risk')),
                     'financial_fraud_risk': _safe_float(s.get('financial_fraud_risk')),
                     'book_value_per_share': _safe_float(s.get('book_value_per_share')),
+                    'pe_ttm': _safe_float(s.get('pe_ttm')),
+                    'pe_percentile': _safe_float(s.get('pe_percentile')),
+                    'rd_ratio': _safe_float(s.get('rd_ratio')),
+                    'debt_ratio': _safe_float(s.get('debt_ratio')),
+                    'operating_cash_flow': _safe_float(s.get('operating_cash_flow')),
+                    'financial_updated_at': s.get('financial_updated_at', ''),
                 }
 
             # 还有缺失的，查stock_names（连stocks表都没有）
@@ -1862,7 +2180,7 @@ def get_stocks_batch():
             if still_missing:
                 sm_placeholders = ','.join(['%s'] * len(still_missing))
                 cursor.execute(
-                    f"SELECT code, name FROM stock_names WHERE CONVERT(code USING utf8mb4) IN ({sm_placeholders})",
+                    f"SELECT code, name FROM stock_names WHERE code IN ({sm_placeholders})",
                     still_missing
                 )
                 for n in cursor.fetchall():
@@ -1875,6 +2193,7 @@ def get_stocks_batch():
                         'chip_concentration': None, 'macd_divergence': None,
                         'trend_analysis': None, 'price_position': None,
                         'roe': None, 'net_profit_yoy': None, 'net_profit_qoq': None,
+                        'selected_at': None, 'financial_updated_at': None,
                     }
 
                 for code in still_missing:
@@ -1887,6 +2206,7 @@ def get_stocks_batch():
                             'chip_concentration': None, 'macd_divergence': None,
                             'trend_analysis': None, 'price_position': None,
                             'roe': None, 'net_profit_yoy': None, 'net_profit_qoq': None,
+                            'selected_at': None, 'financial_updated_at': None,
                         }
 
         # ===== 补充MACD背离和板块 =====
@@ -2522,8 +2842,8 @@ def get_financial_updates():
                    d.net_profit_yoy, d.net_profit_qoq, d.revenue_yoy, d.updated_date,
                    s.price, s.change_pct
             FROM daily_financial_updates d
-            LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
-            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = s.code
+            LEFT JOIN stock_names n ON d.code = n.code
+            LEFT JOIN stocks s ON d.code = s.code
             WHERE d.updated_date = %s
             ORDER BY d.{sort_by} {order.upper()}
         """, (today,))
@@ -2599,8 +2919,8 @@ def get_financial_updates_by_date(date_str):
                    d.net_profit_yoy, d.net_profit_qoq, d.revenue_yoy, d.updated_date,
                    s.price, s.change_pct
             FROM daily_financial_updates d
-            LEFT JOIN stock_names n ON CONVERT(d.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
-            LEFT JOIN stocks s ON CONVERT(d.code USING utf8mb4) = s.code
+            LEFT JOIN stock_names n ON d.code = n.code
+            LEFT JOIN stocks s ON d.code = s.code
             WHERE d.updated_date = %s
             ORDER BY d.{sort_by} {order.upper()}
         """, (date_str,))
@@ -2850,7 +3170,7 @@ def search_stocks():
                    a.fund_embezzlement_risk, a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk, a.book_value_per_share, a.revenue,
                    f.net_profit_yoy, f.net_profit_qoq, f.roe as fin_roe
             FROM (
-                SELECT CONVERT(k.code USING utf8mb4) COLLATE utf8mb4_unicode_ci as code, k.close
+                SELECT k.code, k.close
                 FROM stock_kline k
                 INNER JOIN (
                     SELECT code, MAX(date) as max_date
@@ -2867,7 +3187,7 @@ def search_stocks():
                 INNER JOIN (
                     SELECT code, MAX(report_date) as max_date
                     FROM stock_financial_history
-                    WHERE code IN ({placeholders})
+                    WHERE code IN ({placeholders}) AND net_profit_yoy IS NOT NULL
                     GROUP BY code
                 ) m ON h.code = m.code AND h.report_date = m.max_date
             ) f ON t.code = f.code
@@ -2918,6 +3238,11 @@ def search_stocks():
                 'financial_fraud_risk': _safe_float(row.get('financial_fraud_risk')),
                 'book_value_per_share': _safe_float(row.get('book_value_per_share')),
                 'revenue': row.get('revenue'),
+                'pe_ttm': _safe_float(row.get('pe_ttm')),
+                'pe_percentile': _safe_float(row.get('pe_percentile')),
+                'rd_ratio': _safe_float(row.get('rd_ratio')),
+                'debt_ratio': _safe_float(row.get('debt_ratio')),
+                'operating_cash_flow': _safe_float(row.get('operating_cash_flow')),
             }
 
         # 对没有K线数据的，尝试直接从stocks表获取
@@ -2932,6 +3257,7 @@ def search_stocks():
                        a.total_market_cap, a.dividend_count,
                        a.other_receivables_ratio, a.fund_embezzlement_risk,
                        a.rd_ratio, a.debt_ratio, a.operating_cash_flow, a.financial_fraud_risk, a.book_value_per_share,
+                       a.pe_ttm, a.pe_percentile,
                        f.net_profit_yoy, f.net_profit_qoq, f.roe as fin_roe
                 FROM stocks s
                 LEFT JOIN stock_analysis a ON s.code = a.code

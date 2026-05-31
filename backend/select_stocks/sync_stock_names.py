@@ -7,16 +7,9 @@
 import pymysql
 import time
 
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4',
-    'connect_timeout': 30
-}
+from db import get_db
 
-conn = pymysql.connect(**DB_CONFIG)
+conn = get_db()
 cursor = conn.cursor()
 
 # 获取需要更新的代码列表（每只股票只取最新日期的一条）
@@ -24,7 +17,7 @@ print("获取需要更新的股票...")
 cursor.execute("""
     SELECT DISTINCT k.code
     FROM stock_kline k
-    LEFT JOIN stock_names n ON CONVERT(k.code USING utf8mb4) = CONVERT(n.code USING utf8mb4)
+    LEFT JOIN stock_names n ON k.code = n.code
     WHERE k.name IS NULL OR k.name = ''
     LIMIT 2000
 """)
@@ -39,7 +32,7 @@ for i, code in enumerate(codes):
     try:
         cursor.execute("""
             UPDATE stock_kline
-            SET name = (SELECT name FROM stock_names WHERE CONVERT(stock_names.code USING utf8mb4) = CONVERT(stock_kline.code USING utf8mb4) LIMIT 1)
+            SET name = (SELECT name FROM stock_names WHERE stock_names.code = stock_kline.code LIMIT 1)
             WHERE code = %s AND (name IS NULL OR name = '')
             LIMIT 1
         """, (code,))

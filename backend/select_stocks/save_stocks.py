@@ -3,6 +3,7 @@
 import pymysql
 from datetime import datetime
 import re
+from db import get_db
 
 # 读取选股结果
 stocks = []
@@ -20,13 +21,7 @@ with open('/tmp/selector.log', 'r') as f:
 print(f"读取到 {len(stocks)} 只股票")
 
 # 连接数据库
-conn = pymysql.connect(
-    host='localhost',
-    user='root',
-    password='',
-    database='select_stocks',
-    charset='utf8mb4'
-)
+conn = get_db()
 cursor = conn.cursor()
 
 # 清空旧数据

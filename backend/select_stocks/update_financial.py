@@ -9,16 +9,7 @@ import akshare as ak
 import json
 import time
 
-DB_CONFIG = {
-    'host': 'localhost',
-    'user': 'root',
-    'password': '',
-    'database': 'select_stocks',
-    'charset': 'utf8mb4'
-}
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
+from db import get_db
 
 def update_financial_data(codes=None):
     """从akshare获取财务数据并更新到数据库。

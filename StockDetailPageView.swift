@@ -270,6 +270,11 @@ struct StockDetailContent: View {
                    股东趋势图(holders: holders)
                 }
 
+                // 机构持仓趋势
+                if let instTrend = detailedStock?.inst_ownership_trend, !instTrend.isEmpty {
+                    机构持仓趋势图(data: instTrend)
+                }
+
                 // 财务数据趋势
                 if let history = financialHistory, !history.isEmpty {
                     财务趋势图(history: history)

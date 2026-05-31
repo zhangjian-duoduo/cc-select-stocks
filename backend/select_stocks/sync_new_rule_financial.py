@@ -11,16 +11,9 @@ import requests
 from bs4 import BeautifulSoup
 import time
 
-DB_CONFIG = {
-    'host': 'localhost', 'user': 'root', 'password': '',
-    'database': 'select_stocks', 'charset': 'utf8mb4',
-    'autocommit': True
-}
+from db import get_db
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
-
-def get_db():
-    return pymysql.connect(**DB_CONFIG)
 
 def fetch_eastmoney(report_name, code, fields):
     url = 'https://datacenter.eastmoney.com/securities/api/data/v1/get'
@@ -74,11 +67,19 @@ def fetch_financial_data(code):
 
         # 营收同比增长率（最新报告期）
         yoy = None
+        yoy_report_date = None
+        yoy_report_name = None
         yoy_rows = df[df['metric_name'] == 'calculate_operating_income_total_yoy_growth_ratio']
         if len(yoy_rows) > 0:
             v = yoy_rows.iloc[0].get('value')
             if v and str(v) != 'nan':
                 yoy = float(v)
+            rd = yoy_rows.iloc[0].get('report_date')
+            if rd and str(rd) != 'nan':
+                yoy_report_date = str(rd)[:10]
+            rn = yoy_rows.iloc[0].get('report_name')
+            if rn and str(rn) != 'nan':
+                yoy_report_name = str(rn)
 
         # 资产负债率
         debt = None
@@ -101,9 +102,9 @@ def fetch_financial_data(code):
         except Exception:
             pass
 
-        return latest_rev, annual_rev, rev_3y_ago, yoy, debt, market_cap
+        return latest_rev, annual_rev, rev_3y_ago, yoy, debt, market_cap, yoy_report_date, yoy_report_name
     except Exception:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
 
 def fetch_rd_expense_sina(code):
     """从新浪财经获取研发费用（上一财年年报数据）"""
@@ -172,7 +173,7 @@ def main(codes=None):
     updated = 0
     for i, code in enumerate(stock_codes):
         try:
-            latest_rev, annual_rev, rev_3y_ago, yoy, debt, market_cap = fetch_financial_data(code)
+            latest_rev, annual_rev, rev_3y_ago, yoy, debt, market_cap, yoy_report_date, yoy_report_name = fetch_financial_data(code)
 
             # EastMoney: operating cash flow
             cf_data = fetch_eastmoney('RPT_DMSK_FN_CASHFLOW', code, 'NETCASH_OPERATE,REPORT_DATE')
@@ -199,10 +200,10 @@ def main(codes=None):
             # Write to stock_analysis
             revenue_str = "{:.2f}亿".format(annual_rev/1e8) if annual_rev else None
             cursor.execute("""
-                INSERT INTO stock_analysis (code, debt_ratio, operating_cash_flow,
+                INSERT INTO stock_analysis (code, selection_type, debt_ratio, operating_cash_flow,
                     revenue, rd_ratio, rd_expense, total_market_cap,
-                    rev_cagr_3y, inst_ownership, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    rev_cagr_3y, inst_ownership, financial_updated_at, created_at)
+                VALUES (%s, 'standard', %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
                 ON DUPLICATE KEY UPDATE
                 debt_ratio = COALESCE(VALUES(debt_ratio), debt_ratio),
                 operating_cash_flow = COALESCE(VALUES(operating_cash_flow), operating_cash_flow),
@@ -211,21 +212,22 @@ def main(codes=None):
                 rd_expense = COALESCE(VALUES(rd_expense), rd_expense),
                 total_market_cap = COALESCE(VALUES(total_market_cap), total_market_cap),
                 rev_cagr_3y = COALESCE(VALUES(rev_cagr_3y), rev_cagr_3y),
-                inst_ownership = COALESCE(VALUES(inst_ownership), inst_ownership)
+                inst_ownership = COALESCE(VALUES(inst_ownership), inst_ownership),
+                financial_updated_at = NOW()
             """, (code, debt, cash_flow, revenue_str,
                   rd_ratio, rd_expense, market_cap,
                   rev_cagr_3y, inst_ratio))
             updated += 1
 
-            # Write yoy to stock_financial_history
-            if yoy is not None:
+            # Write yoy to stock_financial_history using actual report_date from akshare
+            if yoy is not None and yoy_report_date is not None:
                 cursor.execute("""
-                    INSERT INTO stock_financial_history (code, revenue_yoy, report_date)
-                    VALUES (%s, %s, CURDATE())
+                    INSERT INTO stock_financial_history (code, revenue_yoy, report_date, report_name)
+                    VALUES (%s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE
                     revenue_yoy = VALUES(revenue_yoy),
-                    report_date = VALUES(report_date)
-                """, (code, "{}%".format(yoy)))
+                    report_name = COALESCE(VALUES(report_name), report_name)
+                """, (code, "{}%".format(yoy), yoy_report_date, yoy_report_name))
 
         except Exception:
             pass

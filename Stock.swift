@@ -78,6 +78,15 @@ struct Stock: Identifiable, Codable {
         var holders: Int?
     }
 
+    struct InstOwnershipData: Codable {
+        var date: String?
+        var inst_ratio: Double?
+        var total_ratio: Double?
+    }
+
+    // 机构持仓趋势
+    var inst_ownership_trend: [InstOwnershipData]?
+
     // 历史财务数据
     var financial_history: [FinancialHistoryItem]?
 
@@ -122,6 +131,7 @@ struct Stock: Identifiable, Codable {
         case other_receivables_ratio, fund_embezzlement_risk, financial_fraud_risk
         case debt_ratio, operating_cash_flow, rd_ratio
         case concepts, surge_reason, surge_concept
+        case inst_ownership_trend
     }
 
     init(from decoder: Decoder) throws {
@@ -166,6 +176,8 @@ struct Stock: Identifiable, Codable {
         operating_cash_flow = try Self.decodeNumeric(container: container, key: .operating_cash_flow)
         rd_ratio = try Self.decodeNumeric(container: container, key: .rd_ratio)
         financial_updated_at = try container.decodeIfPresent(String.self, forKey: .financial_updated_at)
+
+        inst_ownership_trend = try container.decodeIfPresent([InstOwnershipData].self, forKey: .inst_ownership_trend)
 
         concepts = try container.decodeIfPresent([String].self, forKey: .concepts)
         surge_reason = try container.decodeIfPresent(String.self, forKey: .surge_reason)

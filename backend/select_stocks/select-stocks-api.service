@@ -1,0 +1,23 @@
+[Unit]
+Description=Select Stocks Flask API Server
+After=network.target mysql.service
+Wants=mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/select_stocks
+Environment="PYTHONUNBUFFERED=1"
+Environment="DB_HOST=localhost"
+Environment="DB_USER=root"
+Environment="DB_PASSWORD="
+Environment="DB_NAME=select_stocks"
+Environment="API_KEY=select-stocks-2024"
+ExecStart=/usr/bin/python3 /root/select_stocks/run_api.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/root/select_stocks/logs/api.log
+StandardError=append:/root/select_stocks/logs/api_error.log
+
+[Install]
+WantedBy=multi-user.target

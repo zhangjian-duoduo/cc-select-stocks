@@ -12,7 +12,10 @@ struct PortfolioView: View {
     @State private var showBatchSellSheet = false
     @State private var showTradeHistory = false
     @State private var displayMode: PositionDisplayMode = .marketValue
+    @State private var sortAscending = false
     @State private var searchText = ""
+    @State private var showCapitalAlert = false
+    @State private var capitalInput = ""
 
     enum PositionDisplayMode: String, CaseIterable {
         case marketValue = "股票/市值"
@@ -29,6 +32,7 @@ struct PortfolioView: View {
         let position: Position
         let marketValue: Double
         let posReturn: Double
+        let posReturnPct: Double
         let dailyReturn: Double
         let currentPrice: Double
         var id: String { position.id }
@@ -55,17 +59,20 @@ struct PortfolioView: View {
             let price = currentPrice(for: pos)
             let mktVal = price * Double(pos.quantity)
             let posRet = (price - pos.avgCost) * Double(pos.quantity)
+            let posRetPct = pos.avgCost > 0 ? (price - pos.avgCost) / pos.avgCost * 100 : 0
             let dailyPct = stockViewModel.latestChangePct(for: pos.code) ?? 0
             let yesterdayPrice = dailyPct != -100 ? price / (1 + dailyPct / 100) : price
             let dailyRet = (price - yesterdayPrice) * Double(pos.quantity)
-            return DisplayPosition(position: pos, marketValue: mktVal, posReturn: posRet, dailyReturn: dailyRet, currentPrice: price)
+            return DisplayPosition(position: pos, marketValue: mktVal, posReturn: posRet, posReturnPct: posRetPct, dailyReturn: dailyRet, currentPrice: price)
         }.sorted { a, b in
+            let result: Bool
             switch mode {
-            case .marketValue: return a.marketValue > b.marketValue
-            case .priceCost: return a.currentPrice > b.currentPrice
-            case .posReturn: return a.posReturn > b.posReturn
-            case .dailyReturn: return a.dailyReturn > b.dailyReturn
+            case .marketValue: result = a.marketValue > b.marketValue
+            case .priceCost: result = a.currentPrice > b.currentPrice
+            case .posReturn: result = a.posReturn > b.posReturn
+            case .dailyReturn: result = a.dailyReturn > b.dailyReturn
             }
+            return sortAscending ? !result : result
         }
     }
 
@@ -129,19 +136,14 @@ struct PortfolioView: View {
                         Divider()
                             .frame(height: 40)
                             .background(Color.gray.opacity(0.3))
-                        // 持仓盈亏
+                        // 总成本
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("持仓盈亏")
+                            Text("总成本")
                                 .font(.caption)
                                 .foregroundColor(.gray)
-                            HStack(spacing: 2) {
-                                Text(String(format: "%@%.2f", stockViewModel.totalPositionReturn >= 0 ? "+" : "", stockViewModel.totalPositionReturn))
-                                    .font(.headline)
-                                    .foregroundColor(stockViewModel.totalPositionReturn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                                Text(String(format: "(%@%.1f%%)", stockViewModel.totalReturnPct >= 0 ? "+" : "", stockViewModel.totalReturnPct))
-                                    .font(.caption2)
-                                    .foregroundColor(stockViewModel.totalReturnPct >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                            }
+                            Text("¥\(String(format: "%.2f", stockViewModel.totalCost))")
+                                .font(.headline)
+                                .foregroundColor(.white)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -186,6 +188,42 @@ struct PortfolioView: View {
                 .frame(maxWidth: .infinity)
                 .background(Color(hex: "1E1E1E"))
 
+                // 现金余额
+                Button {
+                    capitalInput = String(format: "%.0f", stockViewModel.initialCapital)
+                    showCapitalAlert = true
+                } label: {
+                    HStack {
+                        Text("现金余额")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Image(systemName: "gearshape.fill")
+                            .font(.system(size: 8))
+                            .foregroundColor(.gray.opacity(0.5))
+                        Spacer()
+                        Text("¥\(String(format: "%.2f", stockViewModel.cashBalance))")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                        Text("|")
+                            .font(.caption2)
+                            .foregroundColor(.gray)
+                        Text("总资产")
+                            .font(.caption)
+                            .foregroundColor(.gray)
+                        Text("¥\(String(format: "%.2f", stockViewModel.netWorth))")
+                            .font(.caption)
+                            .foregroundColor(.white)
+                        let allTimeSign = stockViewModel.totalReturnAllTime >= 0 ? "+" : ""
+                        Text("(\(allTimeSign)\(String(format: "%.1f", stockViewModel.totalReturnAllTimePct))%)")
+                            .font(.caption2)
+                            .foregroundColor(stockViewModel.totalReturnAllTime >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color(hex: "252525"))
+
+
                 // 搜索栏
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
@@ -215,16 +253,27 @@ struct PortfolioView: View {
                     ForEach(PositionDisplayMode.allCases, id: \.self) { mode in
                         Button {
                             withAnimation(.easeInOut(duration: 0.15)) {
-                                displayMode = mode
+                                if displayMode == mode {
+                                    sortAscending.toggle()
+                                } else {
+                                    displayMode = mode
+                                    sortAscending = false
+                                }
                             }
                         } label: {
-                            Text(mode.rawValue)
-                                .font(.system(size: 11))
-                                .foregroundColor(displayMode == mode ? .white : .gray)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 6)
-                                .background(displayMode == mode ? Color(hex: "1E88E5").opacity(0.3) : Color.clear)
-                                .cornerRadius(3)
+                            HStack(spacing: 2) {
+                                Text(mode.rawValue)
+                                    .font(.system(size: 11))
+                                if displayMode == mode {
+                                    Image(systemName: sortAscending ? "chevron.up" : "chevron.down")
+                                        .font(.system(size: 8))
+                                }
+                            }
+                            .foregroundColor(displayMode == mode ? .white : .gray)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 6)
+                            .background(displayMode == mode ? Color(hex: "1E88E5").opacity(0.3) : Color.clear)
+                            .cornerRadius(3)
                         }
                     }
                 }
@@ -275,10 +324,15 @@ struct PortfolioView: View {
 
                             // 列3: 持仓盈亏
                             let posSign = dp.posReturn >= 0 ? "+" : ""
-                            Text("\(posSign)¥\(String(format: "%.0f", dp.posReturn))")
-                                .font(.system(size: 11))
-                                .foregroundColor(displayMode == .posReturn ? .white : (dp.posReturn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")))
-                                .frame(maxWidth: .infinity, alignment: .trailing)
+                            VStack(alignment: .trailing, spacing: 1) {
+                                Text("\(posSign)¥\(String(format: "%.0f", dp.posReturn))")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(displayMode == .posReturn ? .white : (dp.posReturn >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50")))
+                                Text("\(posSign)\(String(format: "%.1f", dp.posReturnPct))%")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.gray)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .trailing)
 
                             // 列4: 当日盈亏
                             let daySign = dp.dailyReturn >= 0 ? "+" : ""
@@ -391,6 +445,9 @@ struct PortfolioView: View {
         .onChange(of: displayMode) { _ in
             rebuildDisplayData()
         }
+        .onChange(of: sortAscending) { _ in
+            rebuildDisplayData()
+        }
         .onChange(of: searchText) { _ in
             rebuildDisplayData()
         }
@@ -450,6 +507,18 @@ struct PortfolioView: View {
         }
         .sheet(isPresented: $showAddStockSheet) {
             AddStockSheetView(isPresented: $showAddStockSheet)
+        }
+        .alert("设置初始资金", isPresented: $showCapitalAlert) {
+            TextField("金额", text: $capitalInput)
+                .keyboardType(.numberPad)
+            Button("确定") {
+                if let value = Double(capitalInput), value > 0 {
+                    stockViewModel.initialCapital = value
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("模拟交易的起始资金，已发生的交易不会回溯调整")
         }
     }
 }
@@ -697,47 +766,123 @@ struct BatchSellSheetView: View {
 // 交易记录视图
 struct TradeHistoryView: View {
     let trades: [Trade]
+    @EnvironmentObject var stockViewModel: StockViewModel
+    @State private var isSelectionMode = false
+    @State private var selectedIds: Set<String> = []
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         NavigationStack {
-            List {
-                if trades.isEmpty {
-                    Text("暂无交易记录")
-                        .foregroundColor(.gray)
-                        .listRowBackground(Color(hex: "1E1E1E"))
-                } else {
-                    ForEach(trades) { trade in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(trade.name)
-                                    .font(.headline)
-                                    .foregroundColor(.white)
-                                Text(trade.code)
-                                    .font(.caption)
-                                    .foregroundColor(.gray)
+            VStack(spacing: 0) {
+                List {
+                    if trades.isEmpty {
+                        Text("暂无交易记录")
+                            .foregroundColor(.gray)
+                            .listRowBackground(Color(hex: "1E1E1E"))
+                    } else {
+                        ForEach(trades) { trade in
+                            HStack {
+                                if isSelectionMode {
+                                    Button {
+                                        if selectedIds.contains(trade.id) {
+                                            selectedIds.remove(trade.id)
+                                        } else {
+                                            selectedIds.insert(trade.id)
+                                        }
+                                    } label: {
+                                        Image(systemName: selectedIds.contains(trade.id) ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(selectedIds.contains(trade.id) ? Color(hex: "1E88E5") : .gray)
+                                            .font(.system(size: 16))
+                                    }
+                                    .padding(.trailing, 6)
+                                }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(trade.name)
+                                        .font(.headline)
+                                        .foregroundColor(.white)
+                                    Text(trade.code)
+                                        .font(.caption)
+                                        .foregroundColor(.gray)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 4) {
+                                    Text(trade.isBuy ? "买入" : "卖出")
+                                        .font(.caption)
+                                        .foregroundColor(trade.isBuy ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                                    Text("\(trade.quantity)股 @ ¥\(String(format: "%.2f", trade.price))")
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                    if !trade.isBuy, let pos = stockViewModel.positions[trade.code] {
+                                        let pnl = (trade.price - pos.avgCost) * Double(trade.quantity)
+                                        let sign = pnl >= 0 ? "+" : ""
+                                        Text("盈亏: \(sign)¥\(String(format: "%.2f", pnl))")
+                                            .font(.caption2)
+                                            .foregroundColor(pnl >= 0 ? Color(hex: "F44336") : Color(hex: "4CAF50"))
+                                    }
+                                    Text(trade.date, style: .date)
+                                        .font(.caption2)
+                                        .foregroundColor(.gray)
+                                }
                             }
-                            Spacer()
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text(trade.isBuy ? "买入" : "卖出")
-                                    .font(.caption)
-                                    .foregroundColor(trade.isBuy ? Color(hex: "F44336") : Color(hex: "4CAF50"))
-                                Text("\(trade.quantity)股 @ ¥\(String(format: "%.2f", trade.price))")
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
-                                Text(trade.date, style: .date)
-                                    .font(.caption2)
-                                    .foregroundColor(.gray)
-                            }
+                            .padding(.vertical, 4)
+                            .listRowBackground(Color(hex: "1E1E1E"))
                         }
-                        .padding(.vertical, 4)
-                        .listRowBackground(Color(hex: "1E1E1E"))
                     }
                 }
+                .listStyle(.plain)
+                .background(Color(hex: "121212"))
+
+                // 删除按钮
+                if isSelectionMode && !selectedIds.isEmpty {
+                    Button {
+                        showDeleteConfirm = true
+                    } label: {
+                        Text("删除选中 (\(selectedIds.count))")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(12)
+                            .background(Color(hex: "F44336"))
+                            .cornerRadius(10)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 8)
+                }
             }
-            .listStyle(.plain)
             .background(Color(hex: "121212"))
             .navigationTitle("交易记录")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if isSelectionMode {
+                        Button("全选") {
+                            selectedIds = Set(trades.map { $0.id })
+                        }
+                        .foregroundColor(Color(hex: "1E88E5"))
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !trades.isEmpty {
+                        Button(isSelectionMode ? "取消" : "选择") {
+                            isSelectionMode.toggle()
+                            if !isSelectionMode {
+                                selectedIds.removeAll()
+                            }
+                        }
+                        .foregroundColor(Color(hex: "1E88E5"))
+                    }
+                }
+            }
+            .alert("确认删除", isPresented: $showDeleteConfirm) {
+                Button("删除", role: .destructive) {
+                    stockViewModel.deleteTrades(ids: selectedIds)
+                    selectedIds.removeAll()
+                    isSelectionMode = false
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("将删除 \(selectedIds.count) 条交易记录，此操作不可撤销")
+            }
         }
     }
 }
